@@ -1,7 +1,7 @@
 import {
   FileImage, FileText, FileSpreadsheet, Presentation, Globe, FileType2, Images, ScanText, FileSearch, Combine, Split, FileOutput,
   LayoutGrid, RotateCw, Crop, Minimize2, Hash, Stamp, KeyRound, LockOpen, PenLine, Highlighter, FormInput, ScanLine, IdCard,
-  BookUser, QrCode, ImageUp, FilePen, Type,
+  BookUser, QrCode, ImageUp, FilePen, Type, Languages,
 } from 'lucide-react';
 
 export interface ToolDef {
@@ -33,6 +33,7 @@ export const TOOLS: ToolDef[] = [
   { id: 'idcard', title: 'Cédula / ID', desc: 'Frente y reverso en una página', icon: IdCard, color: C.purple, group: 'scan', route: '/scan?mode=idcard' },
   { id: 'passport', title: 'Pasaporte', desc: 'Escanea y lee los datos', icon: BookUser, color: C.teal, group: 'scan', route: '/scan?mode=passport' },
   { id: 'qr', title: 'Leer QR y códigos', desc: 'Enlaces, Wi-Fi, contactos', icon: QrCode, color: C.slate, group: 'scan', route: '/qr' },
+  { id: 'translate', title: 'Traducir documento', desc: 'Toma una foto y tradúcela', icon: Languages, color: C.green, group: 'scan', route: '/scan?mode=translate' },
 
   // Editar
   { id: 'sign', title: 'Firmar PDF', desc: 'Crea tu firma una vez y reutilízala', icon: PenLine, color: C.blue, group: 'edit', input: 'pdf' },

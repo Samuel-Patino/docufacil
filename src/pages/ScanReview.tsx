@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { DndContext, PointerSensor, TouchSensor, useSensor, useSensors, closestCenter, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, rectSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Plus, Pencil, RotateCw, Trash2, Save, ImagePlus, FileText, FileImage, Type, Loader2, Camera, Palette } from 'lucide-react';
+import { Pencil, RotateCw, Trash2, Save, ImagePlus, FileText, FileImage, Type, Loader2, Camera, Palette, Eye, RefreshCcw, PenLine } from 'lucide-react';
 import { useApp, toast, confirmDialog, withBusy, errMsg } from '../lib/store';
 import { FILTERS, type ScanPage, type FilterId } from '../lib/scanTypes';
 import { finalizePage, pageThumb } from '../lib/imaging';
@@ -16,6 +16,7 @@ import { useLibrary } from '../lib/hooks';
 import { defaultScanName, uid, bytesToBlob } from '../lib/util';
 import { TopBar, Button, IconButton, Modal, Toggle, Segmented, Field, inputCls, Chip, Card } from '../components/ui';
 import { PageEditor } from '../components/PageEditor';
+import { PdfPreview } from '../components/PdfPreview';
 import { DEFAULT_ADJ } from '../lib/scanTypes';
 import { loadCV } from '../lib/cv';
 import { detectInBlob } from '../lib/detect';
@@ -31,7 +32,10 @@ export default function ScanReview() {
   const [name, setName] = useState(scan?.name || defaultScanName(scan?.mode === 'idcard' ? 'Cédula' : scan?.mode === 'receipt' ? 'Recibo' : 'Escaneo'));
   const [folderId, setFolderId] = useState<string | null>(scan?.folderId ?? null);
   const [saveOpen, setSaveOpen] = useState(false);
-  const [format, setFormat] = useState<'pdf' | 'jpg' | 'docx' | 'txt'>('pdf');
+  const [formatSel, setFormat] = useState<'pdf' | 'jpg' | 'docx' | 'txt'>('pdf');
+  const [preview, setPreview] = useState(false);
+  const signing = scan?.mode === 'sign';
+  const format = signing ? 'pdf' : formatSel;
 
   const leaving = useRef(false);
   useEffect(() => {
@@ -96,6 +100,7 @@ export default function ScanReview() {
 
   async function save() {
     setSaveOpen(false);
+    setPreview(false);
     const docName = name.trim() || defaultScanName();
     try {
       const result = await withBusy('Preparando páginas…', async (prog) => {
@@ -142,8 +147,9 @@ export default function ScanReview() {
         return m.id;
       });
       leaving.current = true;
-      toast('Guardado', 'ok');
-      if (result) nav('/doc/' + result, { replace: true });
+      toast(signing ? 'Guardado. Ahora coloca tu firma.' : 'Guardado', 'ok');
+      if (result && signing) nav('/edit/' + result + '?tool=sign', { replace: true });
+      else if (result) nav('/doc/' + result, { replace: true });
       else nav(folderId ? '/f/' + folderId : '/', { replace: true });
       useApp.getState().setScan(null);
     } catch (e) {
@@ -167,16 +173,22 @@ export default function ScanReview() {
         back={false}
         right={
           <>
-            <Button variant="ghost" size="sm" onClick={discard}>
+            <Button variant="ghost" size="sm" className="text-danger! hover:bg-danger-soft" icon={<Trash2 className="size-5" />} onClick={discard}>
               Descartar
             </Button>
           </>
         }
       />
       <div className="mx-auto max-w-5xl px-4 pt-4">
-        <Field label="Nombre del documento">
-          <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} />
-        </Field>
+        <label className="block">
+          <span className="mb-1.5 block text-lg font-extrabold">Nombre del documento</span>
+          <input className={inputCls + ' h-14 text-xl font-bold'} value={name} onChange={(e) => { setName(e.target.value); updateScan((s) => ({ ...s, name: e.target.value })); }} />
+        </label>
+        {signing && (
+          <p className="mt-3 flex items-center gap-2 rounded-2xl bg-primary-soft p-3 text-sm font-semibold text-primary">
+            <PenLine className="size-5 shrink-0" /> Al guardar se abrirá el PDF para que pongas tu firma.
+          </p>
+        )}
 
         <div className="mt-3 mb-2 flex items-center gap-2 text-sm font-bold text-soft">
           <Palette className="size-4" /> Filtro para todas las páginas
@@ -202,12 +214,14 @@ export default function ScanReview() {
                     const np = { ...p, rotation: ((p.rotation + 90) % 360) as any, processed: undefined };
                     refreshThumb(np);
                   }}
+                  onRetake={() => nav(`/scan?mode=${scan.mode}&retake=${p.id}`)}
                   onDelete={async () => {
                     if (await confirmDialog('¿Eliminar esta página?', undefined, { confirmText: 'Eliminar', danger: true })) setPages((ps) => ps.filter((x) => x.id !== p.id));
                   }}
                 />
               ))}
-              <div className="flex aspect-[3/4] flex-col items-stretch justify-center gap-2 rounded-3xl border-2 border-dashed border-line p-3">
+              <div className="flex min-h-[16rem] flex-col items-stretch justify-center gap-2 rounded-3xl border-2 border-dashed border-line p-3">
+                <span className="mb-1 text-center text-base font-extrabold text-soft">Agregar página</span>
                 <Button variant="soft" icon={<Camera className="size-5" />} onClick={() => nav('/scan?mode=' + scan.mode)}>
                   Cámara
                 </Button>
@@ -223,8 +237,16 @@ export default function ScanReview() {
 
       <div className="safe-bottom fixed inset-x-0 bottom-0 z-30 border-t border-line bg-surface/95 backdrop-blur">
         <div className="mx-auto flex max-w-5xl gap-2 px-4 py-3">
-          <Button className="flex-1" size="lg" icon={<Save className="size-6" />} onClick={() => setSaveOpen(true)} disabled={!pages.length}>
-            Guardar
+          <button
+            onClick={() => setPreview(true)}
+            disabled={!pages.length}
+            className="flex h-14 min-w-[5.5rem] shrink-0 flex-col items-center justify-center gap-0.5 rounded-2xl border border-line bg-surface px-2 text-xs font-bold transition hover:bg-surface-2 active:scale-95 disabled:opacity-50"
+          >
+            <Eye className="size-6" />
+            Vista previa
+          </button>
+          <Button className="flex-1" size="lg" icon={signing ? <PenLine className="size-6" /> : <Save className="size-6" />} onClick={() => setSaveOpen(true)} disabled={!pages.length}>
+            {signing ? 'Guardar y firmar' : 'Guardar'}
           </Button>
         </div>
       </div>
@@ -239,11 +261,12 @@ export default function ScanReview() {
               Cancelar
             </Button>
             <Button icon={<Save className="size-5" />} onClick={save}>
-              Guardar
+              {signing ? 'Guardar y firmar' : 'Guardar'}
             </Button>
           </>
         }
       >
+        {!signing && (
         <Field label="Formato">
           <div className="grid grid-cols-2 gap-2">
             {(
@@ -260,6 +283,7 @@ export default function ScanReview() {
             ))}
           </div>
         </Field>
+        )}
         {format === 'pdf' && (
           <>
             <Toggle checked={prefs.ocrOnSave} onChange={(v) => setPrefs({ ocrOnSave: v })} label="Hacer el texto buscable (OCR)" hint="Podrás buscar y copiar el texto del PDF. Tarda unos segundos por página." />
@@ -296,6 +320,20 @@ export default function ScanReview() {
         )}
       </Modal>
 
+      {preview && (
+        <PdfPreview
+          pages={pages}
+          title={name.trim() || defaultScanName()}
+          onClose={() => setPreview(false)}
+          saveLabel={signing ? 'Guardar y firmar' : 'Guardar PDF'}
+          onSave={() => {
+            setFormat('pdf');
+            setPreview(false);
+            setSaveOpen(true);
+          }}
+        />
+      )}
+
       {editing && (
         <PageEditor
           page={editing}
@@ -311,27 +349,37 @@ export default function ScanReview() {
   );
 }
 
-function PageCard({ p, n, onEdit, onRotate, onDelete }: { p: ScanPage; n: number; onEdit: () => void; onRotate: () => void; onDelete: () => void }) {
+function PageCard({ p, n, onEdit, onRotate, onRetake, onDelete }: { p: ScanPage; n: number; onEdit: () => void; onRotate: () => void; onRetake: () => void; onDelete: () => void }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: p.id });
   return (
     <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className={isDragging ? 'relative z-10' : ''}>
-    <Card className={`overflow-hidden p-2 ${isDragging ? 'opacity-70 shadow-pop' : ''}`}>
+    <Card className={`overflow-hidden p-1.5 ${isDragging ? 'opacity-70 shadow-pop' : ''}`}>
       <div {...attributes} {...listeners} className="relative aspect-[3/4] touch-none overflow-hidden rounded-2xl bg-surface-2" onClick={onEdit}>
         {p.thumb ? <img src={p.thumb} alt={`Página ${n}`} className="h-full w-full object-contain" draggable={false} /> : <Loader2 className="absolute inset-0 m-auto size-8 animate-spin text-primary" />}
         <span className="absolute top-2 left-2 rounded-full bg-black/60 px-2.5 py-0.5 text-sm font-black text-white">{n}</span>
       </div>
-      <div className="mt-1 flex justify-around">
-        <IconButton label="Editar página" onClick={onEdit}>
-          <Pencil className="size-5" />
-        </IconButton>
-        <IconButton label="Girar" onClick={onRotate}>
-          <RotateCw className="size-5" />
-        </IconButton>
-        <IconButton label="Eliminar página" onClick={onDelete} className="text-danger">
-          <Trash2 className="size-5" />
-        </IconButton>
+      <div className="mt-1.5 grid grid-cols-2 gap-1">
+        <CardAction icon={<Pencil />} label="Editar" onClick={onEdit} />
+        <CardAction icon={<RotateCw />} label="Rotar" onClick={onRotate} />
+        <CardAction icon={<RefreshCcw />} label="Retomar" onClick={onRetake} />
+        <CardAction icon={<Trash2 />} label="Eliminar" onClick={onDelete} danger />
       </div>
     </Card>
     </div>
+  );
+}
+
+function CardAction({ icon, label, onClick, danger }: { icon: React.ReactNode; label: string; onClick: () => void; danger?: boolean }) {
+  return (
+    <button
+      onClick={onClick}
+      aria-label={label}
+      className={`flex h-10 min-w-0 items-center justify-center gap-1 rounded-xl px-0.5 text-xs font-bold tracking-tight transition active:scale-95 ${
+        danger ? 'text-danger hover:bg-danger-soft' : 'text-soft hover:bg-surface-2 hover:text-text'
+      }`}
+    >
+      <span className="shrink-0 [&>svg]:size-[18px]">{icon}</span>
+      <span className="truncate">{label}</span>
+    </button>
   );
 }

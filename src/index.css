@@ -215,3 +215,10 @@ input[type='range'] {
   100% { opacity: 0; }
 }
 .animate-shutter { animation: shutter 0.35s ease-out forwards; }
+
+@keyframes badge-pop {
+  0% { transform: scale(0.4); }
+  60% { transform: scale(1.35); }
+  100% { transform: scale(1); }
+}
+.animate-badge { animation: badge-pop 0.35s ease-out both; }

@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { X, Zap, ZapOff, Image as ImageIcon, Check, Sparkles, CameraOff, Loader2, Copy } from 'lucide-react';
+import { X, Zap, ZapOff, Image as ImageIcon, Check, Sparkles, CameraOff, Loader2, Copy, MoreHorizontal } from 'lucide-react';
 import { useApp, toast, confirmDialog, setBusy } from '../lib/store';
 import { loadCV } from '../lib/cv';
 import { detectDocument, detectInBlob, quadDistance } from '../lib/detect';
 import { SCAN_MODES, DEFAULT_ADJ, ID_CARD_ASPECT, PASSPORT_ASPECT, type ScanMode, type ScanPage, type Quad, type Pt } from '../lib/scanTypes';
-import { pageThumb, renderScanPage, newCanvas, blobToCanvas } from '../lib/imaging';
+import { pageThumb, renderScanPage, newCanvas, blobToCanvas, scaleCanvas } from '../lib/imaging';
+import { pendingTranslate } from '../lib/translate';
 import { readMRZ, formatMrzDate, type MrzData } from '../lib/ocr';
 import { pickFiles, copyText } from '../lib/share';
 import { uid, canvasToBlob } from '../lib/util';
@@ -65,6 +66,11 @@ export default function Scanner() {
   const modeRef = useRef(mode);
   modeRef.current = mode;
   const pages = scan?.pages || [];
+  const retakeId = params.get('retake');
+  const thumbBtnRef = useRef<HTMLButtonElement>(null);
+  const videoBoxRef = useRef<HTMLDivElement>(null);
+  const [fly, setFly] = useState<{ src: string; key: number } | null>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
 
   useEffect(() => {
     if (initialMode === 'qr') nav('/qr', { replace: true });
@@ -310,9 +316,32 @@ export default function Scanner() {
 
   const addPages = (ps: ScanPage[]) => {
     const st = useApp.getState();
+    if (retakeId && st.scan?.pages.some((p) => p.id === retakeId)) {
+      // Retomar: reemplaza la página y vuelve a la revisión
+      st.updateScan((s) => ({ ...s, pages: s.pages.flatMap((p) => (p.id === retakeId ? ps : [p])) }));
+      stopCamera();
+      toast('Página reemplazada', 'ok');
+      nav('/review', { replace: true });
+      return;
+    }
     if (!st.scan) st.setScan({ pages: ps, mode });
     else st.updateScan((s) => ({ ...s, pages: [...s.pages, ...ps], mode }));
   };
+
+  function toTranslate(page: ScanPage) {
+    pendingTranslate.page = page;
+    const st = useApp.getState();
+    if (st.scan && !st.scan.pages.length) st.setScan(null);
+    stopCamera();
+    nav('/translate');
+  }
+
+  /** Animación: la foto vuela hasta el botón de páginas (abajo a la derecha). */
+  function flyShot(c: HTMLCanvasElement) {
+    try {
+      setFly({ src: scaleCanvas(c, 520).toDataURL('image/jpeg', 0.7), key: Date.now() });
+    } catch {}
+  }
 
   async function capture() {
     const v = videoRef.current;
@@ -324,6 +353,7 @@ export default function Scanner() {
     try {
       const c = newCanvas(v.videoWidth, v.videoHeight);
       c.getContext('2d')!.drawImage(v, 0, 0);
+      flyShot(c);
       const orig = await canvasToBlob(c, 'image/jpeg', 0.93);
       const m = modeRef.current;
       const page = await makePage(orig, m, liveQuad.current, v.videoWidth, v.videoHeight);
@@ -339,6 +369,7 @@ export default function Scanner() {
   captureRef.current = capture;
 
   async function afterCapture(page: ScanPage, m: ScanMode) {
+    if (m === 'translate' && !retakeId) return toTranslate(page);
     if (m === 'idcard') {
       if (idSide === 'front' && !idFront) {
         setIdFront(page);
@@ -355,6 +386,7 @@ export default function Scanner() {
     }
     if (m === 'passport') {
       addPages([page]);
+      if (retakeId) return;
       setBusy('Leyendo los datos del pasaporte…');
       try {
         const c = await renderScanPage({ ...page, filter: 'original' }, 2000);
@@ -392,9 +424,21 @@ export default function Scanner() {
   }
 
   async function fromGallery() {
-    const files = await pickFiles('image/*', true);
+    const files = await pickFiles('image/*', !retakeId && mode !== 'translate');
     if (!files.length) return;
     setBusy('Detectando bordes…');
+    if (mode === 'translate' && !retakeId) {
+      try {
+        const bmp = await createImageBitmap(files[0]);
+        const page = await makePage(files[0], 'document', null, bmp.width, bmp.height);
+        bmp.close();
+        return toTranslate(page);
+      } catch (e: any) {
+        return toast(e?.message || String(e), 'error');
+      } finally {
+        setBusy(null);
+      }
+    }
     try {
       const out: ScanPage[] = [];
       for (let i = 0; i < files.length; i++) {
@@ -410,7 +454,7 @@ export default function Scanner() {
         out.push(page);
       }
       addPages(out);
-      toast(`${out.length} imagen(es) agregadas`, 'ok');
+      if (!retakeId) toast(`${out.length} imagen(es) agregadas`, 'ok');
     } catch (e: any) {
       toast(e?.message || String(e), 'error');
     } finally {
@@ -419,6 +463,10 @@ export default function Scanner() {
   }
 
   async function close() {
+    if (retakeId) {
+      stopCamera();
+      return nav('/review', { replace: true });
+    }
     if (pages.length && !scan?.docId) {
       if (!(await confirmDialog('¿Descartar el escaneo?', `Tienes ${pages.length} página(s) sin guardar.`, { confirmText: 'Descartar', danger: true }))) return;
       useApp.getState().setScan(null);
@@ -426,6 +474,14 @@ export default function Scanner() {
     stopCamera();
     if (scan?.docId) nav('/review');
     else nav('/');
+  }
+
+  function pickMode(id: ScanMode) {
+    if (id === 'qr') return nav('/qr');
+    setMode(id);
+    setIdFront(null);
+    setIdSide('front');
+    liveQuad.current = null;
   }
 
   const last = pages[pages.length - 1];
@@ -439,7 +495,10 @@ export default function Scanner() {
             <X className="size-7" />
           </button>
           <div className="flex-1 text-center text-lg font-extrabold">
-            {mode === 'idcard' ? (idSide === 'front' ? 'Cédula · Frente' : 'Cédula · Reverso') : SCAN_MODES.find((m) => m.id === mode)?.label}
+            {retakeId ? 'Retomar página' : mode === 'idcard' ? (idSide === 'front' ? 'Cédula · Frente' : 'Cédula · Reverso') : SCAN_MODES.find((m) => m.id === mode)?.label}
+            {!retakeId && (mode === 'sign' || mode === 'translate') && (
+              <div className="text-xs font-semibold text-white/75">{mode === 'sign' ? 'Escanea el documento y luego fírmalo' : 'Toma una foto del texto a traducir'}</div>
+            )}
           </div>
           {torch !== null && (
             <button aria-label="Linterna" onClick={toggleTorch} className={`flex size-12 items-center justify-center rounded-full active:scale-95 ${torch ? 'bg-yellow-400 text-black' : 'bg-black/40'}`}>
@@ -457,7 +516,7 @@ export default function Scanner() {
       </div>
 
       {/* video */}
-      <div className="relative min-h-0 flex-1 overflow-hidden">
+      <div ref={videoBoxRef} className="relative min-h-0 flex-1 overflow-hidden">
         <video ref={videoRef} playsInline muted autoPlay className="absolute inset-0 h-full w-full object-cover" />
         <canvas ref={overlayRef} className="pointer-events-none absolute inset-0 h-full w-full" />
         {flash > 0 && <div key={flash} className="pointer-events-none absolute inset-0 bg-white animate-shutter" />}
@@ -503,23 +562,55 @@ export default function Scanner() {
       </div>
 
       {/* modos */}
-      <div className="no-scrollbar flex gap-2 overflow-x-auto bg-black px-3 pt-3 pb-1">
-        {SCAN_MODES.map((m) => (
-          <button
-            key={m.id}
-            onClick={() => {
-              if (m.id === 'qr') return nav('/qr');
-              setMode(m.id);
-              setIdFront(null);
-              setIdSide('front');
-              liveQuad.current = null;
-            }}
-            className={`h-10 shrink-0 rounded-full px-4 text-sm font-bold ${mode === m.id ? 'bg-white text-black' : 'bg-white/10 text-white/85'}`}
-          >
-            {m.label}
-          </button>
-        ))}
-      </div>
+      {!retakeId && (
+        <div className="relative bg-black">
+          <div className="no-scrollbar flex gap-2 overflow-x-auto px-3 pt-3 pb-1">
+            {SCAN_MODES.filter((m) => !m.more).map((m) => (
+              <button
+                key={m.id}
+                onClick={() => pickMode(m.id)}
+                className={`h-10 shrink-0 rounded-full px-4 text-sm font-bold ${mode === m.id ? 'bg-white text-black' : 'bg-white/10 text-white/85'}`}
+              >
+                {m.label}
+              </button>
+            ))}
+            {(() => {
+              const extra = SCAN_MODES.find((m) => m.more && m.id === mode);
+              return (
+                <button
+                  aria-label="Más modos"
+                  aria-expanded={moreOpen}
+                  onClick={() => setMoreOpen((o) => !o)}
+                  className={`flex h-10 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-sm font-bold ${extra ? 'bg-white text-black' : 'bg-white/10 text-white/85'}`}
+                >
+                  {extra?.label}
+                  <MoreHorizontal className="size-5" />
+                </button>
+              );
+            })()}
+          </div>
+          {moreOpen && (
+            <>
+              <div className="fixed inset-0 z-30" onClick={() => setMoreOpen(false)} />
+              <div className="absolute right-3 bottom-full z-40 mb-2 w-52 overflow-hidden rounded-2xl bg-neutral-900/95 shadow-2xl ring-1 ring-white/10 backdrop-blur animate-pop">
+                {SCAN_MODES.filter((m) => m.more).map((m) => (
+                  <button
+                    key={m.id}
+                    onClick={() => {
+                      setMoreOpen(false);
+                      pickMode(m.id);
+                    }}
+                    className={`flex h-12 w-full items-center justify-between px-4 text-left font-bold ${mode === m.id ? 'text-primary' : 'text-white'} hover:bg-white/10`}
+                  >
+                    {m.label}
+                    {mode === m.id && <Check className="size-5" />}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {/* controles */}
       <div className="safe-bottom bg-black">
@@ -547,21 +638,22 @@ export default function Scanner() {
             <span className="flex size-[66px] items-center justify-center rounded-full bg-white">{capturing && <Loader2 className="size-8 animate-spin text-black" />}</span>
           </button>
           <button
+            ref={thumbBtnRef}
             aria-label="Terminar y revisar"
             onClick={() => {
               stopCamera();
               nav('/review');
             }}
-            disabled={!pages.length}
+            disabled={!pages.length || !!retakeId}
             className="relative flex size-14 items-center justify-center rounded-2xl bg-white/10 active:scale-95 disabled:opacity-40"
           >
             {last?.thumb ? <img src={last.thumb} alt="" className="h-full w-full rounded-2xl object-cover" /> : <Check className="size-7" />}
             {pages.length > 0 && (
-              <span className="absolute -top-2 -right-2 flex min-w-7 items-center justify-center rounded-full bg-primary px-1.5 text-sm font-black text-white">{pages.length}</span>
+              <span key={pages.length} className="absolute -top-2 -right-2 flex min-w-7 items-center justify-center rounded-full bg-primary px-1.5 text-sm font-black text-white animate-badge">{pages.length}</span>
             )}
           </button>
         </div>
-        {pages.length > 0 && (
+        {pages.length > 0 && !retakeId && (
           <div className="flex justify-center pb-3">
             <Button
               size="sm"
@@ -576,6 +668,8 @@ export default function Scanner() {
           </div>
         )}
       </div>
+
+      {fly && <FlyShot key={fly.key} src={fly.src} from={videoBoxRef.current} to={thumbBtnRef.current} onDone={() => setFly(null)} />}
 
       <Modal
         open={mrz !== null}
@@ -634,4 +728,38 @@ function mrzFields(m: MrzData): Record<string, string> {
     Sexo: f.sex === 'male' ? 'Masculino' : f.sex === 'female' ? 'Femenino' : f.sex || '',
     Vencimiento: formatMrzDate(f.expirationDate),
   };
+}
+
+/** Miniatura que vuela desde la vista de la cámara hasta el botón de páginas. */
+function FlyShot({ src, from, to, onDone }: { src: string; from: HTMLElement | null; to: HTMLElement | null; onDone: () => void }) {
+  const ref = useRef<HTMLImageElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !from || !to) return onDone();
+    const a = from.getBoundingClientRect();
+    const b = to.getBoundingClientRect();
+    const dx = b.left - a.left, dy = b.top - a.top;
+    const sx = b.width / a.width, sy = b.height / a.height;
+    const anim = el.animate(
+      [
+        { transform: 'translate(0,0) scale(1,1)', borderRadius: '0px', opacity: 1 },
+        { transform: `translate(${a.width * 0.06}px, ${a.height * 0.06}px) scale(0.88,0.88)`, borderRadius: '24px', opacity: 1, offset: 0.25 },
+        { transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`, borderRadius: '120px', opacity: 0.85 },
+      ],
+      { duration: 620, easing: 'cubic-bezier(0.5, 0, 0.3, 1)', fill: 'forwards' },
+    );
+    anim.onfinish = onDone;
+    return () => anim.cancel();
+  }, []);
+  if (!from) return null;
+  const r = from.getBoundingClientRect();
+  return (
+    <img
+      ref={ref}
+      src={src}
+      alt=""
+      className="pointer-events-none fixed z-[60] object-cover shadow-2xl ring-4 ring-white"
+      style={{ left: r.left, top: r.top, width: r.width, height: r.height, transformOrigin: '0 0' }}
+    />
+  );
 }

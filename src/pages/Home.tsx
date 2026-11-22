@@ -192,27 +192,10 @@ export default function Home() {
         </div>
         <h1 className="hidden flex-1 text-2xl font-black lg:block">{current ? current.name : 'Mis documentos'}</h1>
         <div className="flex-1 lg:hidden" />
-        {!selecting ? (
-          <>
-            {unlocked && (
-              <IconButton label="Bloquear ahora" className="text-primary lg:hidden" onClick={lockNow}>
-                <Lock className="size-6" />
-              </IconButton>
-            )}
-            <IconButton label="Seleccionar" onClick={() => setSelecting(true)}>
-              <CheckSquare className="size-6" />
-            </IconButton>
-            <IconButton label="Ordenar" onClick={() => setSortOpen(true)}>
-              <ArrowUpDown className="size-6" />
-            </IconButton>
-            <IconButton label={prefs.view === 'list' ? 'Ver en cuadrícula' : 'Ver en lista'} onClick={() => setPrefs({ view: prefs.view === 'list' ? 'grid' : 'list' })}>
-              {prefs.view === 'list' ? <LayoutGrid className="size-6" /> : <List className="size-6" />}
-            </IconButton>
-          </>
-        ) : (
-          <Button variant="secondary" size="sm" icon={<X className="size-5" />} onClick={() => { setSelecting(false); setSel(new Set()); }}>
-            Listo
-          </Button>
+        {unlocked && (
+          <IconButton label="Bloquear ahora" className="text-primary lg:hidden" onClick={lockNow}>
+            <Lock className="size-6" />
+          </IconButton>
         )}
       </div>
 
@@ -320,7 +303,26 @@ export default function Home() {
 
           {/* Documentos */}
           <section>
-            <h2 className="mb-2 text-lg font-extrabold">{searching ? `${items.length} resultado(s)` : 'Documentos'}</h2>
+            <div className="mb-2 flex items-center gap-1">
+              <h2 className="flex-1 text-lg font-extrabold">{searching ? `${items.length} resultado(s)` : 'Documentos'}</h2>
+              {!selecting ? (
+                <>
+                  <IconButton label="Seleccionar" onClick={() => setSelecting(true)}>
+                    <CheckSquare className="size-6" />
+                  </IconButton>
+                  <IconButton label="Ordenar" onClick={() => setSortOpen(true)}>
+                    <ArrowUpDown className="size-6" />
+                  </IconButton>
+                  <IconButton label={prefs.view === 'list' ? 'Ver en cuadrícula' : 'Ver en lista'} onClick={() => setPrefs({ view: prefs.view === 'list' ? 'grid' : 'list' })}>
+                    {prefs.view === 'list' ? <LayoutGrid className="size-6" /> : <List className="size-6" />}
+                  </IconButton>
+                </>
+              ) : (
+                <Button variant="secondary" size="sm" icon={<X className="size-5" />} onClick={() => { setSelecting(false); setSel(new Set()); }}>
+                  Listo
+                </Button>
+              )}
+            </div>
             {loaded && items.length === 0 ? (
               searching ? (
                 <p className="py-8 text-center text-soft">No se encontraron documentos.</p>

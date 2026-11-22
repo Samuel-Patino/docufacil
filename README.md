@@ -7,7 +7,8 @@ Todo se procesa **en el propio dispositivo**: los documentos no se suben a ning�
 
 **Escáner inteligente**
 - Cámara con detección del documento **en tiempo real** (marco azul) y captura automática cuando está quieto.
-- Modos: Documento, Recibo, Libro (página curva), Pizarra, Cédula (frente y reverso en una página), Pasaporte (lee nombres, número y fechas de la zona MRZ) y lector de QR / códigos de barras.
+- Modos: Documento, Cédula (frente y reverso en una página), QR / códigos de barras, Recibo, Firmar (escanea y firma), Traducir (lee el texto y lo traduce) y, en el botón ⋯, Libro (página curva), Pizarra y Pasaporte (lee nombres, número y fechas de la zona MRZ).
+- Revisión con vista previa del PDF final, y opciones por página: Editar, Rotar, Retomar y Eliminar.
 - Varias páginas por documento, reordenar arrastrando, girar, eliminar.
 - Recorte con esquinas y lupa, corrección de perspectiva y de **páginas curvas**.
 - Filtros: Mágico (quita sombras y ajusta la luz), Original, Color vivo, Gris, Blanco y negro, Recibo (recupera recibos térmicos desteñidos) y Pizarra.

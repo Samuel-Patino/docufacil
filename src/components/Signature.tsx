@@ -4,10 +4,58 @@ import { Modal, Button, Segmented, inputCls, ColorDots, Empty, IconButton } from
 import { listSignatures, addSignature, deleteSignature } from '../lib/library';
 import type { Signature } from '../lib/db';
 import { canvasToBlob } from '../lib/util';
+import getStroke from 'perfect-freehand';
 import { pickFiles } from '../lib/share';
 import { toast, confirmDialog, errMsg } from '../lib/store';
 
 const INK = ['#0f172a', '#1d4ed8', '#7c3aed', '#b91c1c'];
+
+interface InkStroke {
+  pts: [number, number, number][];
+  /** Lápiz con presión real (Apple Pencil, S Pen); si no, se simula con la velocidad. */
+  pen: boolean;
+}
+
+/**
+ * Dibuja los trazos como tinta de bolígrafo: más gruesa al ir lento y donde se
+ * apoya la punta, fina en los trazos rápidos, con la salida afinada y tinta un
+ * poco translúcida que se oscurece donde los trazos se cruzan.
+ */
+function paintInk(ctx: CanvasRenderingContext2D, list: InkStroke[], color: string, live: boolean) {
+  list.forEach((s, i) => {
+    if (!s.pts.length) return;
+    const last = live && i === list.length - 1;
+    const outline = getStroke(s.pts, {
+      size: 4.6,
+      thinning: s.pen ? 0.6 : 0.68,
+      smoothing: 0.62,
+      streamline: 0.42,
+      simulatePressure: !s.pen,
+      easing: (t) => Math.sin((t * Math.PI) / 2),
+      start: { taper: 6, easing: (t) => t * (2 - t), cap: true },
+      end: { taper: last ? 0 : 28, easing: (t) => 1 - Math.pow(1 - t, 3), cap: true },
+      last: !last,
+    });
+    if (outline.length < 2) return;
+    const path = new Path2D();
+    path.moveTo(outline[0][0], outline[0][1]);
+    for (let j = 1; j < outline.length; j++) {
+      const [x0, y0] = outline[j];
+      const [x1, y1] = outline[(j + 1) % outline.length];
+      path.quadraticCurveTo(x0, y0, (x0 + x1) / 2, (y0 + y1) / 2);
+    }
+    path.closePath();
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = color;
+    ctx.fill(path);
+    // borde levemente más oscuro: la tinta se acumula en los bordes del trazo
+    ctx.globalAlpha = 0.35;
+    ctx.lineWidth = 0.6;
+    ctx.strokeStyle = color;
+    ctx.stroke(path);
+    ctx.globalAlpha = 1;
+  });
+}
 
 /** Recorta los bordes vacíos de un canvas con transparencia. */
 function trimCanvas(c: HTMLCanvasElement): HTMLCanvasElement {
@@ -36,9 +84,20 @@ export function SignatureCreator({ onSaved, onCancel }: { onSaved: (s: Signature
   const [color, setColor] = useState(INK[0]);
   const [name, setName] = useState('');
   const cv = useRef<HTMLCanvasElement>(null);
-  const drawing = useRef(false);
-  const last = useRef<{ x: number; y: number; t: number; w: number } | null>(null);
+  const strokes = useRef<InkStroke[]>([]);
+  const cur = useRef<InkStroke | null>(null);
   const [empty, setEmpty] = useState(true);
+
+  const redraw = () => {
+    const c = cv.current;
+    if (!c) return;
+    const dpr = devicePixelRatio || 1;
+    const ctx = c.getContext('2d')!;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, c.width, c.height);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    paintInk(ctx, cur.current ? [...strokes.current, cur.current] : strokes.current, color, !!cur.current);
+  };
 
   useEffect(() => {
     if (mode !== 'draw') return;
@@ -46,44 +105,27 @@ export function SignatureCreator({ onSaved, onCancel }: { onSaved: (s: Signature
     const dpr = devicePixelRatio || 1;
     c.width = c.clientWidth * dpr;
     c.height = c.clientHeight * dpr;
-    c.getContext('2d')!.scale(dpr, dpr);
+    strokes.current = [];
     setEmpty(true);
   }, [mode]);
 
-  const pos = (e: React.PointerEvent) => {
-    const r = cv.current!.getBoundingClientRect();
-    return { x: e.clientX - r.left, y: e.clientY - r.top, t: performance.now() };
-  };
+  useEffect(redraw, [color]);
 
-  const stroke = (p: { x: number; y: number; t: number }) => {
-    const ctx = cv.current!.getContext('2d')!;
-    const l = last.current;
-    // grosor variable según la velocidad, como una pluma
-    const v = l ? Math.hypot(p.x - l.x, p.y - l.y) / Math.max(1, p.t - l.t) : 0;
-    const w = Math.max(1.4, Math.min(4.2, 4.2 - v * 1.6));
-    const ww = l ? l.w * 0.6 + w * 0.4 : w;
-    ctx.strokeStyle = color;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.lineWidth = ww;
-    ctx.beginPath();
-    if (l) {
-      ctx.moveTo(l.x, l.y);
-      ctx.quadraticCurveTo(l.x, l.y, (l.x + p.x) / 2, (l.y + p.y) / 2);
-      ctx.lineTo(p.x, p.y);
-    } else {
-      ctx.arc(p.x, p.y, ww / 2, 0, Math.PI * 2);
-      ctx.fillStyle = color;
-      ctx.fill();
+  const addPoints = (e: React.PointerEvent) => {
+    const s = cur.current;
+    if (!s) return;
+    const r = cv.current!.getBoundingClientRect();
+    const evs: PointerEvent[] = (e.nativeEvent as any).getCoalescedEvents?.() || [e.nativeEvent];
+    for (const ev of evs.length ? evs : [e.nativeEvent]) {
+      s.pts.push([ev.clientX - r.left, ev.clientY - r.top, ev.pressure || 0.5]);
     }
-    ctx.stroke();
-    last.current = { ...p, w: ww };
-    setEmpty(false);
+    redraw();
   };
 
   const clear = () => {
-    const c = cv.current!;
-    c.getContext('2d')!.clearRect(0, 0, c.width, c.height);
+    strokes.current = [];
+    cur.current = null;
+    redraw();
     setEmpty(true);
   };
 
@@ -92,7 +134,16 @@ export function SignatureCreator({ onSaved, onCancel }: { onSaved: (s: Signature
       let blob: Blob;
       if (mode === 'draw') {
         if (empty) return toast('Dibuja tu firma primero', 'info');
-        blob = await canvasToBlob(trimCanvas(cv.current!), 'image/png');
+        // Se vuelve a dibujar a 3× para que la firma quede nítida al imprimir
+        const src = cv.current!;
+        const k = 3;
+        const big = document.createElement('canvas');
+        big.width = src.clientWidth * k;
+        big.height = src.clientHeight * k;
+        const bctx = big.getContext('2d')!;
+        bctx.scale(k, k);
+        paintInk(bctx, strokes.current, color, false);
+        blob = await canvasToBlob(trimCanvas(big), 'image/png');
       } else {
         if (!name.trim()) return toast('Escribe tu nombre', 'info');
         await document.fonts.load('600 80px "Dancing Script"');
@@ -149,14 +200,23 @@ export function SignatureCreator({ onSaved, onCancel }: { onSaved: (s: Signature
               ref={cv}
               className="h-48 w-full touch-none rounded-2xl border-2 border-dashed border-line bg-white"
               onPointerDown={(e) => {
-                (e.target as Element).setPointerCapture(e.pointerId);
-                drawing.current = true;
-                last.current = null;
-                stroke(pos(e));
+                try {
+                  (e.target as Element).setPointerCapture(e.pointerId);
+                } catch {}
+                cur.current = { pts: [], pen: e.pointerType === 'pen' && e.pressure > 0 && e.pressure !== 0.5 };
+                addPoints(e);
+                setEmpty(false);
               }}
-              onPointerMove={(e) => drawing.current && stroke(pos(e))}
-              onPointerUp={() => (drawing.current = false)}
-              onPointerCancel={() => (drawing.current = false)}
+              onPointerMove={(e) => cur.current && addPoints(e)}
+              onPointerUp={() => {
+                if (cur.current?.pts.length) strokes.current.push(cur.current);
+                cur.current = null;
+                redraw();
+              }}
+              onPointerCancel={() => {
+                cur.current = null;
+                redraw();
+              }}
             />
             <div className="pointer-events-none absolute inset-x-6 bottom-10 border-b-2 border-slate-300" />
             {empty && <span className="pointer-events-none absolute inset-0 flex items-center justify-center text-lg font-semibold text-slate-400">Firma aquí con el dedo o el mouse</span>}

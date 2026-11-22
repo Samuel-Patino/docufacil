@@ -17,6 +17,7 @@ const Tools = lazy(() => import('./pages/Tools'));
 const ToolRunner = lazy(() => import('./pages/ToolRunner'));
 const QrPage = lazy(() => import('./pages/QrPage'));
 const Settings = lazy(() => import('./pages/Settings'));
+const TranslatePage = lazy(() => import('./pages/TranslatePage'));
 
 function Loading() {
   return (
@@ -73,6 +74,7 @@ export default function App() {
           </Route>
           <Route path="/scan" element={<Scanner />} />
           <Route path="/review" element={<ScanReview />} />
+          <Route path="/translate" element={<TranslatePage />} />
           <Route path="/doc/:id" element={<DocOpen />} />
           <Route path="/edit/:id" element={<PdfEditor />} />
           <Route path="/image/:id" element={<ImageEditorPage />} />

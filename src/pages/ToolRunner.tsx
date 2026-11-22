@@ -15,7 +15,7 @@ import * as conv from '../lib/convert';
 import { ocrImage, OCR_LANGS, type OcrResult } from '../lib/ocr';
 import { useApp, toast, withBusy, errMsg } from '../lib/store';
 import { baseName, extOf, formatBytes, parseRanges, bytesToBlob, uid } from '../lib/util';
-import { openFromDevice } from '../lib/device';
+import { DevicePick } from '../components/DevicePick';
 
 interface Input {
   key: string;
@@ -64,12 +64,6 @@ export default function ToolRunner() {
     })();
   }, []);
 
-  // herramientas que abren otra pantalla directamente
-  useEffect(() => {
-    if (tool?.id === 'editpdf') {
-      openFromDevice('pdf').then((id) => (id ? nav('/edit/' + id, { replace: true }) : nav(-1)));
-    }
-  }, [tool?.id]);
 
   // abrir el PDF de la primera entrada (para miniaturas)
   useEffect(() => {
@@ -102,6 +96,7 @@ export default function ToolRunner() {
         <Empty icon={<X className="size-9" />} title="Herramienta no encontrada" />
       </div>
     );
+  if (tool.id === 'editpdf') return <DevicePick kind="pdf" />;
 
   async function addFromDoc(m: DocMeta) {
     const editRoute = { sign: 'sign', annotate: '', form: 'form' } as Record<string, string>;

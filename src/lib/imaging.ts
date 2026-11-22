@@ -448,8 +448,8 @@ export async function finalizePage(page: ScanPage, quality: keyof typeof QUALITY
 }
 
 export async function pageThumb(page: ScanPage): Promise<string> {
-  const c = await renderScanPage(page, 420);
-  return URL.createObjectURL(await canvasToBlob(c, 'image/jpeg', 0.8));
+  const c = await renderScanPage(page, 1000);
+  return URL.createObjectURL(await canvasToBlob(c, 'image/jpeg', 0.86));
 }
 
 /** Vista previa de un filtro (miniatura). */

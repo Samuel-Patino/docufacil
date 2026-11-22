@@ -19,6 +19,8 @@ export interface Prefs {
   readerTheme: 'light' | 'sepia' | 'dark';
   readerSize: number;
   qrHistory: { text: string; at: number }[];
+  trLang: string;
+  v?: number;
 }
 
 const DEFAULT_PREFS: Prefs = {
@@ -26,7 +28,7 @@ const DEFAULT_PREFS: Prefs = {
   textSize: 'normal',
   view: 'list',
   sort: 'manual',
-  autoCapture: true,
+  autoCapture: false,
   defaultFilter: 'mode',
   quality: 'high',
   ocrLang: 'spa+eng',
@@ -35,11 +37,15 @@ const DEFAULT_PREFS: Prefs = {
   readerTheme: 'light',
   readerSize: 19,
   qrHistory: [],
+  trLang: 'es',
 };
 
 function loadPrefs(): Prefs {
   try {
-    return { ...DEFAULT_PREFS, ...JSON.parse(localStorage.getItem('df-ui') || '{}') };
+    const saved = JSON.parse(localStorage.getItem('df-ui') || '{}');
+    // v2: la captura automática pasa a estar apagada por defecto
+    if (!saved.v) delete saved.autoCapture;
+    return { ...DEFAULT_PREFS, ...saved, v: 2 };
   } catch {
     return DEFAULT_PREFS;
   }

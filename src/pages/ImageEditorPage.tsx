@@ -8,7 +8,8 @@ import { finalizePage } from '../lib/imaging';
 import { toast, withBusy, errMsg } from '../lib/store';
 import { uid, baseName } from '../lib/util';
 import { Modal, Button, Spinner } from '../components/ui';
-import { openFromDevice, saveBackToDevice, isFromDevice, hasFsAccess } from '../lib/device';
+import { saveBackToDevice, isFromDevice, hasFsAccess } from '../lib/device';
+import { DevicePick } from '../components/DevicePick';
 
 export default function ImageEditorPage() {
   const { id } = useParams();
@@ -18,17 +19,10 @@ export default function ImageEditorPage() {
   const [result, setResult] = useState<ScanPage | null>(null);
 
   useEffect(() => {
+    if (id === 'device') return;
     (async () => {
       try {
-        let docId = id!;
-        if (id === 'device') {
-          const d = await openFromDevice('image');
-          if (!d) return nav(-1);
-          docId = d;
-          nav('/image/' + d, { replace: true });
-          return;
-        }
-        const m = await getDoc(docId);
+        const m = await getDoc(id!);
         if (!m) return nav('/');
         setDoc(m);
         const blob = await getDocBlob(m.id);
@@ -61,6 +55,7 @@ export default function ImageEditorPage() {
     }
   }
 
+  if (id === 'device') return <DevicePick kind="image" />;
   if (!page || !doc)
     return (
       <div className="flex h-dvh items-center justify-center">

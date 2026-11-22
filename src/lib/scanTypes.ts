@@ -50,16 +50,18 @@ export const FILTERS: { id: FilterId; label: string; hint: string }[] = [
   { id: 'whiteboard', label: 'Pizarra', hint: 'Fondo blanco y trazos con color' },
 ];
 
-export type ScanMode = 'document' | 'receipt' | 'book' | 'whiteboard' | 'idcard' | 'passport' | 'qr';
+export type ScanMode = 'document' | 'receipt' | 'book' | 'whiteboard' | 'idcard' | 'passport' | 'qr' | 'sign' | 'translate';
 
-export const SCAN_MODES: { id: ScanMode; label: string; filter: FilterId }[] = [
+export const SCAN_MODES: { id: ScanMode; label: string; filter: FilterId; more?: boolean }[] = [
   { id: 'document', label: 'Documento', filter: 'auto' },
-  { id: 'receipt', label: 'Recibo', filter: 'receipt' },
-  { id: 'book', label: 'Libro', filter: 'auto' },
-  { id: 'whiteboard', label: 'Pizarra', filter: 'whiteboard' },
   { id: 'idcard', label: 'Cédula', filter: 'enhanced' },
-  { id: 'passport', label: 'Pasaporte', filter: 'enhanced' },
   { id: 'qr', label: 'QR', filter: 'original' },
+  { id: 'receipt', label: 'Recibo', filter: 'receipt' },
+  { id: 'sign', label: 'Firmar', filter: 'auto' },
+  { id: 'translate', label: 'Traducir', filter: 'auto' },
+  { id: 'book', label: 'Libro', filter: 'auto', more: true },
+  { id: 'whiteboard', label: 'Pizarra', filter: 'whiteboard', more: true },
+  { id: 'passport', label: 'Pasaporte', filter: 'enhanced', more: true },
 ];
 
 /** Cédula / tarjeta ID-1: 85.6 × 54 mm. Pasaporte (página de datos ID-3): 125 × 88 mm */
