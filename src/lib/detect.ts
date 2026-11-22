@@ -114,16 +114,16 @@ export function detectDocument(cv: any, canvas: HTMLCanvasElement, opts: { curve
         const v1x = a.x - b.x, v1y = a.y - b.y, v2x = c.x - b.x, v2y = c.y - b.y;
         const cos = (v1x * v2x + v1y * v2y) / ((Math.hypot(v1x, v1y) * Math.hypot(v2x, v2y)) || 1);
         const ang = (Math.acos(Math.max(-1, Math.min(1, cos))) * 180) / Math.PI;
-        if (ang < (strict ? 55 : 40) || ang > (strict ? 125 : 140)) return rej("angle", q);
+        if (ang < 38 || ang > 142) return rej("angle", q);
       }
       const r1 = Math.min(L(0), L(2)) / (Math.max(L(0), L(2)) || 1);
       const r2 = Math.min(L(1), L(3)) / (Math.max(L(1), L(3)) || 1);
-      if (r1 < (strict ? 0.55 : 0.35) || r2 < (strict ? 0.55 : 0.35)) return rej("sides", q);
+      if (r1 < 0.33 || r2 < 0.33) return rej("sides", q);
       if (Math.min(L(0), L(1)) / (Math.max(L(0), L(1)) || 1) < 0.12) return rej("aspect", q);
       if (!strict) return qa;
-      // En vivo: la hoja debe verse completa dentro del cuadro
-      const m = Math.min(W, H) * 0.012;
-      if (q.some((p) => p.x < m || p.y < m || p.x > W - m || p.y > H - m)) {
+      // En vivo: se descarta lo que se sale del cuadro por dos o más esquinas (p. ej. el piso)
+      const m = Math.max(1.5, Math.min(W, H) * 0.005);
+      if (q.filter((p) => p.x < m || p.y < m || p.x > W - 1 - m || p.y > H - 1 - m).length >= 2) {
         frameCands.push(q);
         return rej("frame", q);
       }
@@ -146,7 +146,7 @@ export function detectDocument(cv: any, canvas: HTMLCanvasElement, opts: { curve
         }
       }
       const support = total ? hits / total : 0;
-      if (support < 0.55) return rej("support " + support.toFixed(2), q);
+      if (support < 0.35) return rej("support " + support.toFixed(2), q);
       // Contraste papel / alrededor
       const inside = cv.Mat.zeros(H, W, cv.CV_8U);
       const ring = new cv.Mat();
@@ -162,7 +162,7 @@ export function detectDocument(cv: any, canvas: HTMLCanvasElement, opts: { curve
       const mOut = cv.mean(gray, ring)[0];
       [inside, ring, poly, pv, kr].forEach((x) => x.delete());
       const contrast = Math.abs(mIn - mOut);
-      if (contrast < 9 && support < 0.8) return rej("contrast " + contrast.toFixed(1) + " sup " + support.toFixed(2), q);
+      if (contrast < 5 && support < 0.6) return rej("contrast " + contrast.toFixed(1) + " sup " + support.toFixed(2), q);
       return qa * support * Math.min(1.5, 0.6 + contrast / 40);
     };
 
@@ -211,6 +211,34 @@ export function detectDocument(cv: any, canvas: HTMLCanvasElement, opts: { curve
     cv.dilate(edges, edges, k3, new cv.Point(-1, -1), 2);
     edgeMap = edges;
     tryEdges(edges);
+
+    // 1b) Bordes suaves (papel claro sobre fondo claro, objetos con poco contraste)
+    if (!best) {
+      const soft = keep(new cv.Mat());
+      cv.Canny(gray, soft, 12, 45);
+      cv.dilate(soft, soft, k3, new cv.Point(-1, -1), 2);
+      edgeMap2 = soft;
+      tryEdges(soft);
+    }
+
+    // 1c) Bordes por color: objetos de distinto color pero igual brillo que el fondo
+    if (!best) {
+      const ch = keep(new cv.MatVector());
+      cv.split(src, ch);
+      const colorEdges = keep(cv.Mat.zeros(H, W, cv.CV_8U));
+      const one = keep(new cv.Mat());
+      for (let i = 0; i < 3; i++) {
+        const c = ch.get(i);
+        cv.morphologyEx(c, c, cv.MORPH_CLOSE, kernel);
+        cv.GaussianBlur(c, c, new cv.Size(5, 5), 0);
+        cv.Canny(c, one, 20, 70);
+        cv.bitwise_or(colorEdges, one, colorEdges);
+        c.delete();
+      }
+      cv.dilate(colorEdges, colorEdges, k3, new cv.Point(-1, -1), 2);
+      edgeMap2 = colorEdges;
+      tryEdges(colorEdges);
+    }
 
     // 2) Papel claro sobre fondo oscuro (umbral de Otsu)
     if (!best) {

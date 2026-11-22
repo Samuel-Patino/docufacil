@@ -59,6 +59,10 @@ export default function Scanner() {
   const [idFront, setIdFront] = useState<ScanPage | null>(null);
   const [mrz, setMrz] = useState<MrzData | null | 'none'>(null);
   const liveQuad = useRef<Quad | null>(null);
+  // Marco que se dibuja: se mueve suavemente hacia el último detectado y aparece/desaparece con un fundido
+  const targetQuad = useRef<Quad | null>(null);
+  const dispQuad = useRef<Quad | null>(null);
+  const dispAlpha = useRef(0);
   const candQuad = useRef<Quad | null>(null);
   const hits = useRef(0);
   const misses = useRef(0);
@@ -185,7 +189,7 @@ export default function Scanner() {
         else hits.current = raw ? 1 : 0;
         candQuad.current = raw;
         misses.current = raw ? 0 : misses.current + 1;
-        let q: Quad | null = raw && (hits.current >= 2 || (prev && quadDistance(raw, prev) < 0.08)) ? raw : !raw && misses.current <= 1 ? prev : null;
+        let q: Quad | null = raw && (hits.current >= 2 || (prev && quadDistance(raw, prev) < 0.08)) ? raw : !raw && misses.current <= 3 ? prev : null;
         if (q && prev && quadDistance(q, prev) < 0.08) {
           // suavizado para que el marco no tiemble
           q = q.map((p, i) => ({ x: prev[i].x * 0.55 + p.x * 0.45, y: prev[i].y * 0.55 + p.y * 0.45 })) as Quad;
@@ -224,7 +228,7 @@ export default function Scanner() {
             captureRef.current();
           }
         }
-        draw(q, m);
+        targetQuad.current = q;
       }
       timer = setTimeout(loop, 110);
     };
@@ -239,7 +243,7 @@ export default function Scanner() {
   prefsRef.current = prefs;
   const capturingRef = useRef(false);
 
-  function draw(q: Quad | null, m: ScanMode) {
+  function draw(q: Quad | null, m: ScanMode, alpha = 1) {
     const c = overlayRef.current, v = videoRef.current;
     if (!c || !v) return;
     const dpr = devicePixelRatio || 1;
@@ -258,7 +262,8 @@ export default function Scanner() {
     const ox = (ew - vw * s) / 2, oy = (eh - vh * s) / 2;
     const P = (p: Pt) => ({ x: ox + p.x * vw * s, y: oy + p.y * vh * s });
     const asp = aspectFor(m);
-    if (asp && !q) {
+    if (asp && alpha < 1) {
+      ctx.globalAlpha = 1 - alpha;
       const g = guideQuad(asp, vw, vh).map(P);
       ctx.strokeStyle = 'rgba(255,255,255,0.9)';
       ctx.lineWidth = 3;
@@ -269,7 +274,8 @@ export default function Scanner() {
       ctx.stroke();
       ctx.setLineDash([]);
     }
-    if (!q) return;
+    ctx.globalAlpha = alpha;
+    if (!q || alpha <= 0) return;
     const pts = q.map(P);
     ctx.fillStyle = 'rgba(37, 99, 235, 0.22)';
     ctx.strokeStyle = '#3b82f6';
@@ -290,6 +296,35 @@ export default function Scanner() {
       ctx.stroke();
     }
   }
+
+  // Animación del marco: en cada cuadro de pantalla se acerca suavemente al último detectado
+  useEffect(() => {
+    let raf = 0;
+    let last = performance.now();
+    const grow = (q: Quad, k: number): Quad => {
+      const cx = (q[0].x + q[1].x + q[2].x + q[3].x) / 4, cy = (q[0].y + q[1].y + q[2].y + q[3].y) / 4;
+      return q.map((p) => ({ x: cx + (p.x - cx) * k, y: cy + (p.y - cy) * k })) as Quad;
+    };
+    const tick = (now: number) => {
+      const dt = Math.min(100, now - last);
+      last = now;
+      const t = targetQuad.current;
+      let d = dispQuad.current;
+      if (t) {
+        if (!d || dispAlpha.current < 0.05) d = grow(t, 1.05);
+        else {
+          const k = 1 - Math.exp(-dt / 75);
+          d = d.map((p, i) => ({ x: p.x + (t[i].x - p.x) * k, y: p.y + (t[i].y - p.y) * k })) as Quad;
+        }
+        dispAlpha.current = Math.min(1, dispAlpha.current + dt / 160);
+      } else dispAlpha.current = Math.max(0, dispAlpha.current - dt / 200);
+      dispQuad.current = d;
+      if (videoRef.current?.videoWidth) draw(d, modeRef.current, dispAlpha.current);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
 
   // ----- captura -----
   const filterFor = (m: ScanMode) => {
