@@ -185,7 +185,7 @@ export default function Scanner() {
         else hits.current = raw ? 1 : 0;
         candQuad.current = raw;
         misses.current = raw ? 0 : misses.current + 1;
-        let q: Quad | null = raw && (hits.current >= 3 || (prev && quadDistance(raw, prev) < 0.08)) ? raw : !raw && misses.current <= 1 ? prev : null;
+        let q: Quad | null = raw && (hits.current >= 2 || (prev && quadDistance(raw, prev) < 0.08)) ? raw : !raw && misses.current <= 1 ? prev : null;
         if (q && prev && quadDistance(q, prev) < 0.08) {
           // suavizado para que el marco no tiemble
           q = q.map((p, i) => ({ x: prev[i].x * 0.55 + p.x * 0.45, y: prev[i].y * 0.55 + p.y * 0.45 })) as Quad;
@@ -302,14 +302,15 @@ export default function Scanner() {
     const cv = await loadCV().catch(() => null);
     let quad: Quad | null = null;
     let curve: ScanPage['curve'] = null;
-    if (cv) {
+    // Se usa el marco que se veía en vivo; la foto completa sólo afina (o lo busca si no había)
+    if (live) quad = live;
+    if (cv && (!quad || m === 'book')) {
       const det = await detectInBlob(cv, orig, m === 'book');
-      if (det) {
+      if (det && (!quad || quadDistance(det.quad, quad) < 0.08)) {
         quad = det.quad;
         curve = det.curve;
       }
     }
-    if (!quad && live) quad = live;
     const asp = aspectFor(m);
     if (!quad && asp) quad = guideQuad(asp, frameW, frameH);
     const page: ScanPage = {

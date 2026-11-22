@@ -7,7 +7,7 @@ import { renderScanPage } from '../lib/imaging';
 import { ocrImage, OCR_LANGS } from '../lib/ocr';
 import { pendingTranslate, translateUnits, TR_LANGS, langLabel, googleTranslateUrl } from '../lib/translate';
 import { buildUnits, prepareLens, drawLens, refineLightText, type LensUnit, type LensPrep } from '../lib/lens';
-import { copyText, shareText, shareFiles, downloadBlob } from '../lib/share';
+import { copyText, shareText, shareFiles, saveFileAs } from '../lib/share';
 import { addDoc } from '../lib/library';
 import { defaultScanName, canvasToBlob } from '../lib/util';
 
@@ -252,8 +252,7 @@ export default function TranslatePage() {
                   variant="secondary"
                   icon={<Download className="size-5" />}
                   onClick={async () => {
-                    const f = await imageFile();
-                    downloadBlob(f, f.name);
+                    await saveFileAs(await imageFile());
                   }}
                 >
                   Descargar

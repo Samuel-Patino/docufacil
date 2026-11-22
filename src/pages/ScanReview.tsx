@@ -17,6 +17,7 @@ import { defaultScanName, uid, bytesToBlob } from '../lib/util';
 import { TopBar, Button, IconButton, Modal, Toggle, Segmented, Field, inputCls, Chip, Card } from '../components/ui';
 import { PageEditor } from '../components/PageEditor';
 import { PdfPreview } from '../components/PdfPreview';
+import { PagePreview } from '../components/PagePreview';
 import { DEFAULT_ADJ } from '../lib/scanTypes';
 import { loadCV } from '../lib/cv';
 import { detectInBlob } from '../lib/detect';
@@ -29,6 +30,7 @@ export default function ScanReview() {
   const setPrefs = useApp((s) => s.setPrefs);
   const { folders } = useLibrary();
   const [editing, setEditing] = useState<ScanPage | null>(null);
+  const [viewing, setViewing] = useState<number | null>(null);
   const [name, setName] = useState(scan?.name || defaultScanName(scan?.mode === 'idcard' ? 'Cédula' : scan?.mode === 'receipt' ? 'Recibo' : 'Escaneo'));
   const [folderId, setFolderId] = useState<string | null>(scan?.folderId ?? null);
   const [saveOpen, setSaveOpen] = useState(false);
@@ -64,6 +66,16 @@ export default function ScanReview() {
   async function refreshThumb(p: ScanPage) {
     const thumb = await pageThumb(p).catch(() => undefined);
     setPages((ps) => ps.map((x) => (x.id === p.id ? { ...p, thumb } : x)));
+  }
+
+  function rotatePage(p: ScanPage) {
+    refreshThumb({ ...p, rotation: ((p.rotation + 90) % 360) as any, processed: undefined });
+  }
+  function retakePage(p: ScanPage) {
+    nav(`/scan?mode=${scan!.mode}&retake=${p.id}`);
+  }
+  async function deletePage(p: ScanPage) {
+    if (await confirmDialog('¿Eliminar esta página?', undefined, { confirmText: 'Eliminar', danger: true })) setPages((ps) => ps.filter((x) => x.id !== p.id));
   }
 
   function onDragEnd(e: DragEndEvent) {
@@ -209,15 +221,11 @@ export default function ScanReview() {
                   key={p.id}
                   p={p}
                   n={i + 1}
+                  onView={() => setViewing(i)}
                   onEdit={() => setEditing(p)}
-                  onRotate={() => {
-                    const np = { ...p, rotation: ((p.rotation + 90) % 360) as any, processed: undefined };
-                    refreshThumb(np);
-                  }}
-                  onRetake={() => nav(`/scan?mode=${scan.mode}&retake=${p.id}`)}
-                  onDelete={async () => {
-                    if (await confirmDialog('¿Eliminar esta página?', undefined, { confirmText: 'Eliminar', danger: true })) setPages((ps) => ps.filter((x) => x.id !== p.id));
-                  }}
+                  onRotate={() => rotatePage(p)}
+                  onRetake={() => retakePage(p)}
+                  onDelete={() => deletePage(p)}
                 />
               ))}
               <div className="flex min-h-[16rem] flex-col items-stretch justify-center gap-2 rounded-3xl border-2 border-dashed border-line p-3">
@@ -334,6 +342,21 @@ export default function ScanReview() {
         />
       )}
 
+      {viewing !== null && (
+        <PagePreview
+          pages={pages}
+          start={viewing}
+          onClose={() => setViewing(null)}
+          onEdit={(p) => {
+            setViewing(null);
+            setEditing(p);
+          }}
+          onRotate={rotatePage}
+          onRetake={retakePage}
+          onDelete={deletePage}
+        />
+      )}
+
       {editing && (
         <PageEditor
           page={editing}
@@ -349,12 +372,12 @@ export default function ScanReview() {
   );
 }
 
-function PageCard({ p, n, onEdit, onRotate, onRetake, onDelete }: { p: ScanPage; n: number; onEdit: () => void; onRotate: () => void; onRetake: () => void; onDelete: () => void }) {
+function PageCard({ p, n, onView, onEdit, onRotate, onRetake, onDelete }: { p: ScanPage; n: number; onView: () => void; onEdit: () => void; onRotate: () => void; onRetake: () => void; onDelete: () => void }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: p.id });
   return (
     <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className={isDragging ? 'relative z-10' : ''}>
     <Card className={`overflow-hidden p-1.5 ${isDragging ? 'opacity-70 shadow-pop' : ''}`}>
-      <div {...attributes} {...listeners} className="relative aspect-[3/4] touch-none overflow-hidden rounded-2xl bg-surface-2" onClick={onEdit}>
+      <div {...attributes} {...listeners} className="relative aspect-[3/4] touch-none overflow-hidden rounded-2xl bg-surface-2" onClick={onView}>
         {p.thumb ? <img src={p.thumb} alt={`Página ${n}`} className="h-full w-full object-contain" draggable={false} /> : <Loader2 className="absolute inset-0 m-auto size-8 animate-spin text-primary" />}
         <span className="absolute top-2 left-2 rounded-full bg-black/60 px-2.5 py-0.5 text-sm font-black text-white">{n}</span>
       </div>

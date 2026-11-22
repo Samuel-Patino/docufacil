@@ -21,6 +21,46 @@ export function downloadBlob(blob: Blob, name: string) {
   setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
 
+const isIOSDevice = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+/**
+ * Guarda un archivo dejando elegir dónde:
+ * - Computador (Chrome/Edge): ventana "Guardar como" para escoger carpeta y nombre.
+ * - iPhone: menú Compartir → "Guardar en Archivos", donde se escoge la carpeta.
+ * - Otros (Android, Firefox): carpeta Descargas.
+ */
+export async function saveFileAs(file: File): Promise<'saved' | 'cancelled' | 'downloaded'> {
+  const w = window as any;
+  if (typeof w.showSaveFilePicker === 'function') {
+    try {
+      const ext = (file.name.match(/\.[a-z0-9]+$/i)?.[0] || '').toLowerCase();
+      const h = await w.showSaveFilePicker({
+        suggestedName: safeFileName(file.name),
+        types: ext ? [{ description: ext.slice(1).toUpperCase(), accept: { [file.type || 'application/octet-stream']: [ext] } }] : undefined,
+      });
+      const ws = await h.createWritable();
+      await ws.write(file);
+      await ws.close();
+      toast(`Guardado como “${h.name}” en la carpeta que elegiste`, 'ok', 4000);
+      return 'saved';
+    } catch (e: any) {
+      if (e?.name === 'AbortError') return 'cancelled';
+    }
+  }
+  if (isIOSDevice() && canShareFiles([file])) {
+    toast('Toca “Guardar en Archivos” y elige la carpeta', 'info', 4500);
+    try {
+      await navigator.share({ files: [file] });
+      return 'saved';
+    } catch (e: any) {
+      if (e?.name === 'AbortError') return 'cancelled';
+    }
+  }
+  downloadBlob(file, file.name);
+  toast(`“${file.name}” se guardó en la carpeta Descargas`, 'ok', 4500);
+  return 'downloaded';
+}
+
 /** Comparte archivos con el menú del sistema (WhatsApp, correo, etc.). */
 export async function shareFiles(files: File[], title?: string): Promise<'shared' | 'downloaded' | 'cancelled'> {
   if (canShareFiles(files)) {

@@ -1,7 +1,7 @@
 import { Download } from 'lucide-react';
 import type { DocMeta } from '../lib/db';
 import { getDocFile } from '../lib/library';
-import { downloadBlob } from '../lib/share';
+import { saveFileAs } from '../lib/share';
 import { toast, errMsg } from '../lib/store';
 
 /** Botón flotante "Descargar", encima de la barra inferior del visor (lado derecho). */
@@ -9,8 +9,7 @@ export function DownloadFab({ doc }: { doc: DocMeta }) {
   async function go() {
     try {
       const f = await getDocFile(doc.id);
-      downloadBlob(f, f.name);
-      toast('Descargando ' + f.name, 'ok');
+      await saveFileAs(f);
     } catch (e) {
       toast(errMsg(e), 'error');
     }
