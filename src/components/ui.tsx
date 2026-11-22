@@ -60,7 +60,7 @@ export function BarButton({ icon, label, onClick, primary }: { icon: ReactNode; 
   return (
     <button
       onClick={onClick}
-      className={`flex min-w-[4.25rem] shrink-0 flex-col items-center gap-0.5 rounded-2xl px-2 py-1.5 text-[11px] font-bold transition active:scale-95 ${
+      className={`flex min-w-[3.9rem] shrink-0 flex-col items-center gap-0.5 rounded-2xl px-2 py-1.5 text-[11px] font-bold transition active:scale-95 ${
         primary ? 'bg-primary-soft text-primary' : 'text-soft hover:bg-surface-2 hover:text-text'
       }`}
     >

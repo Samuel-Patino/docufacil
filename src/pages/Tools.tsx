@@ -4,6 +4,7 @@ import { Search, X } from 'lucide-react';
 import { TOOLS, GROUPS, type ToolDef } from '../lib/tools';
 import { inputCls, IconButton } from '../components/ui';
 import { openFromDevice } from '../lib/device';
+import { ConvertIcon } from '../components/FormatIcon';
 import { toast, errMsg } from '../lib/store';
 
 export default function Tools() {
@@ -99,9 +100,15 @@ export default function Tools() {
                   onClick={() => open(x)}
                   className="flex flex-col items-center gap-2 rounded-3xl border border-line bg-surface px-2 py-3.5 text-center shadow-card transition hover:-translate-y-0.5 active:scale-[0.97] sm:items-start sm:gap-3 sm:p-5 sm:text-left"
                 >
-                  <span className="flex size-12 shrink-0 items-center justify-center rounded-2xl sm:size-16" style={{ background: x.color + '1f', color: x.color }}>
-                    <x.icon className="size-6 sm:size-8" />
-                  </span>
+                  {x.conv ? (
+                    <span className="flex h-12 shrink-0 items-center px-1 text-[34px] sm:h-16 sm:text-[46px]">
+                      <ConvertIcon from={x.conv[0]} to={x.conv[1]} />
+                    </span>
+                  ) : (
+                    <span className="flex size-12 shrink-0 items-center justify-center rounded-2xl sm:size-16" style={{ background: x.color + '1f', color: x.color }}>
+                      <x.icon className="size-6 sm:size-8" />
+                    </span>
+                  )}
                   <span className="min-w-0">
                     <span className="block text-sm font-extrabold leading-tight sm:text-lg">{x.title}</span>
                     <span className="mt-1 hidden text-sm leading-snug text-soft sm:block">{x.desc}</span>

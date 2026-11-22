@@ -33,7 +33,7 @@ export function DocMenu({ doc, open, onClose, inViewer }: { doc: DocMeta | null;
           {!inViewer && <MenuItem icon={<Eye className="size-5" />} label="Abrir" onClick={run(() => nav('/doc/' + doc.id))} />}
           <MenuItem icon={<Share2 className="size-5" />} label="Compartir" hint="WhatsApp, correo…" onClick={run(async () => shareFiles([await getDocFile(doc.id)]))} />
           {isPdf && <MenuItem icon={<PenLine className="size-5" />} label="Firmar" onClick={run(() => nav(`/edit/${doc.id}?tool=sign`))} />}
-          {isPdf && <MenuItem icon={<Highlighter className="size-5" />} label="Anotar y dibujar" onClick={run(() => nav(`/edit/${doc.id}`))} />}
+          {isPdf && <MenuItem icon={<Highlighter className="size-5" />} label="Editar PDF" onClick={run(() => nav(`/edit/${doc.id}`))} />}
           {isPdf && <MenuItem icon={<FormInput className="size-5" />} label="Llenar formulario" onClick={run(() => nav(`/edit/${doc.id}?tool=form`))} />}
           {doc.hasScan && (
             <MenuItem

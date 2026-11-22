@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
-  Hand, MousePointer2, Pen, Highlighter, Type, StickyNote, Square, ArrowUpRight, Eraser, ImagePlus, PenLine, Undo2, Redo2,
+  Check, Pen, Highlighter, Type, StickyNote, Square, ArrowUpRight, Eraser, ImagePlus, PenLine, Undo2, Redo2,
   Save, X, Trash2, Minus, Plus, FormInput, Paintbrush, Loader2,
 } from 'lucide-react';
 import { getDoc, getDocBlob, updateDocBlob, addDoc } from '../lib/library';
@@ -16,14 +16,12 @@ import { pickFiles } from '../lib/share';
 import { uid, blobToDataURL, bytesToBlob, baseName } from '../lib/util';
 import { isFromDevice, saveBackToDevice } from '../lib/device';
 
-type Tool = 'hand' | 'select' | 'pen' | 'marker' | 'highlight' | 'text' | 'note' | 'rect' | 'arrow' | 'whiteout' | 'eraser';
+type Tool = 'pen' | 'marker' | 'highlight' | 'text' | 'note' | 'rect' | 'arrow' | 'whiteout' | 'eraser';
 
 const COLORS = ['#0f172a', '#dc2626', '#2563eb', '#16a34a', '#9333ea', '#ea580c', '#ffffff'];
 const HL = ['#fde047', '#86efac', '#93c5fd', '#f9a8d4', '#fdba74'];
 
 const TOOLS: { id: Tool; label: string; icon: any }[] = [
-  { id: 'hand', label: 'Mover página', icon: Hand },
-  { id: 'select', label: 'Seleccionar', icon: MousePointer2 },
   { id: 'pen', label: 'Lápiz', icon: Pen },
   { id: 'marker', label: 'Marcador', icon: Paintbrush },
   { id: 'highlight', label: 'Resaltar', icon: Highlighter },
@@ -58,7 +56,7 @@ export default function PdfEditor() {
   const [annots, setAnnots] = useState<Annot[]>([]);
   const [undo, setUndo] = useState<Annot[][]>([]);
   const [redo, setRedo] = useState<Annot[][]>([]);
-  const [tool, setTool] = useState<Tool>(params.get('tool') === 'sign' ? 'select' : 'pen');
+  const [tool, setTool] = useState<Tool | null>(null);
   const [color, setColor] = useState(COLORS[0]);
   const [hl, setHl] = useState(HL[0]);
   const [width, setWidth] = useState(2.5);
@@ -74,6 +72,8 @@ export default function PdfEditor() {
   const [saveOpen, setSaveOpen] = useState(false);
   const [dirty, setDirty] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
+  const gestureRef = useRef(false);
+  const [gesturing, setGesturing] = useState(false);
   const visiblePage = useRef(0);
 
   useEffect(() => {
@@ -105,6 +105,17 @@ export default function PdfEditor() {
     const ro = new ResizeObserver(() => setContainerW(Math.min(1000, el.clientWidth - 24)));
     ro.observe(el);
     return () => ro.disconnect();
+  }, [pdf]);
+
+  // Mientras se mueve o pellizca una anotación, la página no se desplaza ni hace zoom (iPhone)
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const block = (e: TouchEvent) => {
+      if (gestureRef.current) e.preventDefault();
+    };
+    el.addEventListener('touchmove', block, { passive: false });
+    return () => el.removeEventListener('touchmove', block);
   }, [pdf]);
 
   async function loadFields(p: PDFDocumentProxy) {
@@ -187,9 +198,9 @@ export default function PdfEditor() {
     const centerY = Math.min(vp.height - h, Math.max(0, (cy - er.top) / k - h / 2));
     const a: Annot = { id: uid(), page, type: 'image', x: (vp.width - w) / 2, y: centerY, w, h, src, signature };
     add(a);
-    setTool('select');
+    setTool(null);
     setSelected(a.id);
-    toast(signature ? 'Arrastra la firma a su lugar. Usa la esquina azul para cambiar el tamaño.' : 'Arrastra la imagen a su lugar.', 'info', 4500);
+    toast('Arrástrala a su lugar. Para cambiar el tamaño, pellizca con dos dedos o usa la esquina azul.', 'info', 5000);
   }
 
   async function save(asCopy: boolean) {
@@ -264,6 +275,7 @@ export default function PdfEditor() {
       <div
         ref={scroller}
         className="min-h-0 flex-1 overflow-auto bg-surface-3/60 px-3 py-4"
+        style={{ touchAction: gesturing ? 'none' : undefined }}
         onScroll={(e) => {
           const el = e.currentTarget;
           const kids = Array.from(el.querySelectorAll('[data-page]')) as HTMLElement[];
@@ -278,7 +290,13 @@ export default function PdfEditor() {
               pdf={pdf}
               index={i}
               width={pageW}
-              tool={formMode ? 'hand' : tool}
+              tool={formMode ? null : tool}
+              gestureRef={gestureRef}
+              setGesturing={setGesturing}
+              onPlaced={(nid) => {
+                setTool(null);
+                setSelected(nid);
+              }}
               annots={annots.filter((a) => a.page === i)}
               selected={selected}
               setSelected={setSelected}
@@ -307,9 +325,14 @@ export default function PdfEditor() {
       {!formMode && (
         <div className="border-t border-line bg-surface">
           <div className="no-scrollbar mx-auto flex max-w-6xl items-center gap-3 overflow-x-auto px-3 py-2">
+            {tool && (
+              <Button size="sm" icon={<Check className="size-5" />} onClick={() => setTool(null)}>
+                Listo
+              </Button>
+            )}
             {sel ? (
               <>
-                <span className="text-sm font-bold text-soft">Seleccionado</span>
+                <span className="shrink-0 text-sm font-bold text-soft">Seleccionado</span>
                 {sel.type === 'text' && (
                   <>
                     <IconButton label="Letra más pequeña" onClick={() => update(sel.id, { size: Math.max(6, (sel as any).size - 2) } as any)}>
@@ -364,7 +387,7 @@ export default function PdfEditor() {
               </>
             ) : (
               <span className="text-sm text-soft">
-                {tool === 'hand' ? 'Desplázate por el documento.' : tool === 'select' ? 'Toca una anotación para moverla o cambiarla.' : tool === 'eraser' ? 'Toca una anotación para borrarla.' : 'Arrastra para tapar contenido con blanco.'}
+                {tool === null ? 'Toca una anotación para seleccionarla, o elige una herramienta abajo.' : tool === 'eraser' ? 'Toca una anotación para borrarla.' : 'Arrastra para tapar contenido con blanco.'}
               </span>
             )}
             <div className="ml-auto flex shrink-0 items-center gap-1">
@@ -410,7 +433,7 @@ export default function PdfEditor() {
               label={t.label}
               onClick={() => {
                 setFormMode(false);
-                setTool(t.id);
+                setTool((cur) => (cur === t.id ? null : t.id));
                 setSelected(null);
               }}
             >
@@ -469,7 +492,10 @@ interface PageProps {
   pdf: PDFDocumentProxy;
   index: number;
   width: number;
-  tool: Tool;
+  tool: Tool | null;
+  gestureRef: React.MutableRefObject<boolean>;
+  setGesturing: (v: boolean) => void;
+  onPlaced: (id: string) => void;
   annots: Annot[];
   allAnnots: Annot[];
   selected: string | null;
@@ -504,15 +530,31 @@ function bbox(a: Annot) {
   }
 }
 
-function moved(a: Annot, dx: number, dy: number): Partial<Annot> {
+let lastGestureEnd = 0;
+
+/** Escala la anotación k veces alrededor de (cx, cy) y luego la desplaza (dx, dy). */
+function transformAnnot(a: Annot, k: number, cx: number, cy: number, dx: number, dy: number): Partial<Annot> {
+  const T = (x: number, y: number) => ({ x: cx + (x - cx) * k + dx, y: cy + (y - cy) * k + dy });
   switch (a.type) {
     case 'ink':
-      return { pts: a.pts.map((p) => ({ x: p.x + dx, y: p.y + dy })) } as any;
+      return { pts: a.pts.map((q) => T(q.x, q.y)) } as any;
     case 'line':
-    case 'arrow':
-      return { x1: a.x1 + dx, y1: a.y1 + dy, x2: a.x2 + dx, y2: a.y2 + dy } as any;
-    default:
-      return { x: (a as any).x + dx, y: (a as any).y + dy } as any;
+    case 'arrow': {
+      const p1 = T(a.x1, a.y1);
+      const p2 = T(a.x2, a.y2);
+      return { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y } as any;
+    }
+    case 'text': {
+      const q = T(a.x, a.y);
+      return { x: q.x, y: q.y, size: Math.max(4, a.size * k) } as any;
+    }
+    case 'note':
+      return { x: a.x + dx, y: a.y + dy } as any;
+    default: {
+      const o = a as any;
+      const q = T(o.x, o.y);
+      return { x: q.x, y: q.y, w: o.w * k, h: o.h * k } as any;
+    }
   }
 }
 
@@ -522,7 +564,7 @@ function EditablePage(p: PageProps) {
   const holder = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(p.index < 2);
   const [draft, setDraft] = useState<Annot | null>(null);
-  const action = useRef<{ kind: 'draw' | 'move' | 'resize'; start: { x: number; y: number }; id?: string; orig?: Annot; prev?: Annot[] } | null>(null);
+  const action = useRef<{ kind: 'draw'; start: { x: number; y: number } } | null>(null);
   const [rendering, setRendering] = useState(true);
 
   useEffect(() => {
@@ -553,91 +595,174 @@ function EditablePage(p: PageProps) {
     return () => task?.cancel?.();
   }, [page, visible, Math.round(p.width)]);
 
-  const toPage = (e: React.PointerEvent) => {
+  const toPage = (e: { clientX: number; clientY: number }) => {
     const r = holder.current!.getBoundingClientRect();
     return { x: (e.clientX - r.left) / scale, y: (e.clientY - r.top) / scale };
   };
 
-  const drawing = ['pen', 'marker', 'highlight', 'rect', 'arrow', 'whiteout'].includes(p.tool);
+  const drawing = !!p.tool && ['pen', 'marker', 'highlight', 'rect', 'arrow', 'whiteout'].includes(p.tool);
 
-  async function down(e: React.PointerEvent) {
-    if (p.tool === 'hand') return;
+  // Toques: seleccionar (sin herramienta), borrar, agregar texto o comentario
+  async function click(e: React.MouseEvent) {
+    if (Date.now() - lastGestureEnd < 400) return;
     const pt = toPage(e);
     const target = (e.target as Element).closest('[data-id]') as HTMLElement | null;
-    const handle = (e.target as Element).closest('[data-handle]') as HTMLElement | null;
+    if (p.tool === null) {
+      p.setSelected(target ? target.dataset.id! : null);
+      return;
+    }
     if (p.tool === 'eraser') {
       if (target) p.remove(target.dataset.id!);
       return;
     }
-    if (p.tool === 'select') {
-      if (handle) {
-        const a = p.annots.find((x) => x.id === handle.dataset.handle)!;
-        action.current = { kind: 'resize', start: pt, id: a.id, orig: a, prev: p.allAnnots };
-        (e.currentTarget as Element).setPointerCapture(e.pointerId);
-        return;
-      }
-      if (target) {
-        const a = p.annots.find((x) => x.id === target.dataset.id)!;
-        p.setSelected(a.id);
-        action.current = { kind: 'move', start: pt, id: a.id, orig: a, prev: p.allAnnots };
-        (e.currentTarget as Element).setPointerCapture(e.pointerId);
-      } else p.setSelected(null);
-      return;
-    }
     if (p.tool === 'text') {
       const t = await promptDialog('Agregar texto', '', { label: 'Texto', placeholder: 'Escribe aquí', confirmText: 'Agregar' });
-      if (t) p.add({ id: uid(), page: p.index, type: 'text', x: pt.x, y: pt.y - p.style.fontSize * 0.6, w: 0, text: t, size: p.style.fontSize, color: p.style.color });
+      if (!t) return;
+      const nid = uid();
+      p.add({ id: nid, page: p.index, type: 'text', x: pt.x, y: pt.y - p.style.fontSize * 0.6, w: 0, text: t, size: p.style.fontSize, color: p.style.color });
+      p.onPlaced(nid);
       return;
     }
     if (p.tool === 'note') {
       const t = await promptDialog('Agregar comentario', '', { label: 'Comentario', confirmText: 'Agregar' });
-      if (t) p.add({ id: uid(), page: p.index, type: 'note', x: pt.x - 10, y: pt.y - 10, text: t, color: '#facc15' });
-      return;
+      if (!t) return;
+      const nid = uid();
+      p.add({ id: nid, page: p.index, type: 'note', x: pt.x - 10, y: pt.y - 10, text: t, color: '#facc15' });
+      p.onPlaced(nid);
     }
-    if (drawing) {
+  }
+
+  function down(e: React.PointerEvent) {
+    if (!drawing) return;
+    const pt = toPage(e);
+    try {
       (e.currentTarget as Element).setPointerCapture(e.pointerId);
-      action.current = { kind: 'draw', start: pt };
-      const base = { id: uid(), page: p.index };
-      if (p.tool === 'pen') setDraft({ ...base, type: 'ink', pts: [pt], color: p.style.color, width: p.style.width, opacity: 1 });
-      else if (p.tool === 'marker') setDraft({ ...base, type: 'ink', pts: [pt], color: p.style.hl, width: 14, opacity: 0.4 });
-      else if (p.tool === 'arrow') setDraft({ ...base, type: 'arrow', x1: pt.x, y1: pt.y, x2: pt.x, y2: pt.y, color: p.style.color, width: p.style.width });
-      else setDraft({ ...base, type: p.tool as 'highlight' | 'rect' | 'whiteout', x: pt.x, y: pt.y, w: 0, h: 0, color: p.tool === 'highlight' ? p.style.hl : p.tool === 'whiteout' ? '#ffffff' : p.style.color, width: p.style.width });
-    }
+    } catch {}
+    action.current = { kind: 'draw', start: pt };
+    const base = { id: uid(), page: p.index };
+    if (p.tool === 'pen') setDraft({ ...base, type: 'ink', pts: [pt], color: p.style.color, width: p.style.width, opacity: 1 });
+    else if (p.tool === 'marker') setDraft({ ...base, type: 'ink', pts: [pt], color: p.style.hl, width: 14, opacity: 0.4 });
+    else if (p.tool === 'arrow') setDraft({ ...base, type: 'arrow', x1: pt.x, y1: pt.y, x2: pt.x, y2: pt.y, color: p.style.color, width: p.style.width });
+    else setDraft({ ...base, type: p.tool as 'highlight' | 'rect' | 'whiteout', x: pt.x, y: pt.y, w: 0, h: 0, color: p.tool === 'highlight' ? p.style.hl : p.tool === 'whiteout' ? '#ffffff' : p.style.color, width: p.style.width });
   }
 
   function moveEv(e: React.PointerEvent) {
     const act = action.current;
-    if (!act) return;
+    if (!act || !draft) return;
     const pt = toPage(e);
-    if (act.kind === 'draw' && draft) {
-      if (draft.type === 'ink') setDraft({ ...draft, pts: [...draft.pts, pt] });
-      else if (draft.type === 'arrow') setDraft({ ...draft, x2: pt.x, y2: pt.y });
-      else if ('w' in draft) setDraft({ ...(draft as any), x: Math.min(act.start.x, pt.x), y: Math.min(act.start.y, pt.y), w: Math.abs(pt.x - act.start.x), h: Math.abs(pt.y - act.start.y) });
-    } else if (act.kind === 'move' && act.orig) {
-      p.update(act.id!, moved(act.orig, pt.x - act.start.x, pt.y - act.start.y), false);
-    } else if (act.kind === 'resize' && act.orig) {
-      const o = act.orig as any;
-      const dx = pt.x - act.start.x;
-      if (o.type === 'text') p.update(o.id, { size: Math.max(6, o.size * (1 + dx / Math.max(40, bbox(o).w))) } as any, false);
-      else if (o.type === 'image') {
-        const w = Math.max(20, o.w + dx);
-        p.update(o.id, { w, h: (o.h / o.w) * w } as any, false);
-      } else if ('w' in o) p.update(o.id, { w: Math.max(6, o.w + dx), h: Math.max(6, o.h + (pt.y - act.start.y)) } as any, false);
-    }
+    if (draft.type === 'ink') setDraft({ ...draft, pts: [...draft.pts, pt] });
+    else if (draft.type === 'arrow') setDraft({ ...draft, x2: pt.x, y2: pt.y });
+    else if ('w' in draft) setDraft({ ...(draft as any), x: Math.min(act.start.x, pt.x), y: Math.min(act.start.y, pt.y), w: Math.abs(pt.x - act.start.x), h: Math.abs(pt.y - act.start.y) });
   }
 
   function up() {
     const act = action.current;
     action.current = null;
-    if (!act) return;
-    if (act.kind === 'draw' && draft) {
-      const b = bbox(draft);
-      if (draft.type === 'ink' ? draft.pts.length > 1 : b.w > 3 || b.h > 3) p.add(draft);
-      setDraft(null);
-    } else if ((act.kind === 'move' || act.kind === 'resize') && act.prev) {
-      const now = p.allAnnots.find((a) => a.id === act.id);
-      if (now && JSON.stringify(now) !== JSON.stringify(act.orig)) p.commitMove(act.prev);
-    }
+    if (!act || !draft) return;
+    const b = bbox(draft);
+    if (draft.type === 'ink' ? draft.pts.length > 1 : b.w > 3 || b.h > 3) p.add(draft);
+    setDraft(null);
+  }
+
+  // ----- mover (un dedo) y cambiar tamaño (dos dedos o la esquina azul) -----
+  const gest = useRef<{
+    ptrs: Map<number, { x: number; y: number }>;
+    base: Annot;
+    cur: Annot;
+    orig: Annot;
+    prev: Annot[];
+    baseC: { x: number; y: number };
+    baseD: number;
+    handle: boolean;
+    stop: () => void;
+  } | null>(null);
+  useEffect(() => () => gest.current?.stop(), []);
+
+  function startGesture(e: React.PointerEvent, handle: boolean, a: Annot) {
+    e.stopPropagation();
+    if (gest.current) return;
+    try {
+      (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    } catch {}
+    const { update, commitMove, gestureRef, setGesturing } = p;
+    const sc = scale;
+    type Ptrs = Map<number, { x: number; y: number }>;
+    const center = (m: Ptrs) => {
+      const v = [...m.values()];
+      return { x: v.reduce((s, q) => s + q.x, 0) / v.length, y: v.reduce((s, q) => s + q.y, 0) / v.length };
+    };
+    const spread = (m: Ptrs) => {
+      const v = [...m.values()];
+      return v.length > 1 ? Math.hypot(v[0].x - v[1].x, v[0].y - v[1].y) : 0;
+    };
+    const rebase = () => {
+      const g = gest.current!;
+      g.base = g.cur;
+      g.baseC = center(g.ptrs);
+      g.baseD = spread(g.ptrs);
+    };
+    const apply = () => {
+      const g = gest.current!;
+      const c = center(g.ptrs);
+      const b = bbox(g.base);
+      let k = 1;
+      let dx = (c.x - g.baseC.x) / sc;
+      let dy = (c.y - g.baseC.y) / sc;
+      let cx = b.x + b.w / 2;
+      let cy = b.y + b.h / 2;
+      if (g.handle) {
+        // la esquina azul agranda desde la esquina superior izquierda
+        k = Math.hypot(b.w + dx, b.h + dy) / (Math.hypot(b.w, b.h) || 1);
+        cx = b.x;
+        cy = b.y;
+        dx = dy = 0;
+      } else if (g.ptrs.size > 1 && g.baseD > 0) k = spread(g.ptrs) / g.baseD;
+      const size = Math.max(b.w, b.h) || 1;
+      k = Math.min(Math.max(k, 12 / size), 2000 / size);
+      const patch = transformAnnot(g.base, k, cx, cy, dx, dy);
+      g.cur = { ...g.base, ...patch } as Annot;
+      update(g.base.id, patch, false);
+    };
+    const onDown = (ev: PointerEvent) => {
+      const g = gest.current;
+      if (!g || g.handle || g.ptrs.has(ev.pointerId)) return;
+      g.ptrs.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+      rebase();
+    };
+    const onMove = (ev: PointerEvent) => {
+      const g = gest.current;
+      if (!g || !g.ptrs.has(ev.pointerId)) return;
+      g.ptrs.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+      apply();
+    };
+    const onUp = (ev: PointerEvent) => {
+      const g = gest.current;
+      if (!g || !g.ptrs.has(ev.pointerId)) return;
+      g.ptrs.delete(ev.pointerId);
+      if (g.ptrs.size) return rebase();
+      const changed = JSON.stringify(g.cur) !== JSON.stringify(g.orig);
+      const prev = g.prev;
+      g.stop();
+      if (changed) commitMove(prev);
+    };
+    const stop = () => {
+      window.removeEventListener('pointerdown', onDown, true);
+      window.removeEventListener('pointermove', onMove, true);
+      window.removeEventListener('pointerup', onUp, true);
+      window.removeEventListener('pointercancel', onUp, true);
+      gestureRef.current = false;
+      setGesturing(false);
+      lastGestureEnd = Date.now();
+      gest.current = null;
+    };
+    const ptrs: Ptrs = new Map([[e.pointerId, { x: e.clientX, y: e.clientY }]]);
+    gest.current = { ptrs, base: a, cur: a, orig: a, prev: p.allAnnots, baseC: center(ptrs), baseD: 0, handle, stop };
+    gestureRef.current = true;
+    setGesturing(true);
+    window.addEventListener('pointerdown', onDown, true);
+    window.addEventListener('pointermove', onMove, true);
+    window.addEventListener('pointerup', onUp, true);
+    window.addEventListener('pointercancel', onUp, true);
   }
 
   const list = draft ? [...p.annots, draft] : p.annots;
@@ -651,7 +776,8 @@ function EditablePage(p: PageProps) {
         <svg
           className="absolute inset-0 h-full w-full"
           viewBox={`0 0 ${vp1.width} ${vp1.height}`}
-          style={{ touchAction: p.tool === 'hand' ? 'auto' : 'none', cursor: drawing ? 'crosshair' : p.tool === 'text' || p.tool === 'note' ? 'text' : 'default' }}
+          style={{ touchAction: drawing ? 'none' : 'auto', cursor: drawing ? 'crosshair' : p.tool === 'text' || p.tool === 'note' ? 'text' : 'default' }}
+          onClick={click}
           onPointerDown={down}
           onPointerMove={moveEv}
           onPointerUp={up}
@@ -665,19 +791,42 @@ function EditablePage(p: PageProps) {
           {list.map((a) => (
             <AnnotShape key={a.id} a={a} marker={`url(#arr-${p.index})`} />
           ))}
-          {selA && p.tool === 'select' && (() => {
-            const b = bbox(selA);
-            const pad = 4;
-            const resizable = ['image', 'rect', 'highlight', 'whiteout', 'text'].includes(selA.type);
-            return (
-              <g pointerEvents="none">
-                <rect x={b.x - pad} y={b.y - pad} width={b.w + pad * 2} height={b.h + pad * 2} fill="none" stroke="#2563eb" strokeWidth={1.5 / scale} strokeDasharray={`${4 / scale} ${3 / scale}`} />
-                {resizable && <circle data-handle={selA.id} cx={b.x + b.w + pad} cy={b.y + b.h + pad} r={10 / scale} fill="#2563eb" stroke="white" strokeWidth={2 / scale} pointerEvents="all" style={{ cursor: 'nwse-resize' }} />}
-              </g>
-            );
-          })()}
         </svg>
       )}
+      {/* selección: arrastrar para mover; pellizcar o usar la esquina para cambiar el tamaño */}
+      {selA && p.tool === null && (() => {
+        const b = bbox(selA);
+        const pad = 6;
+        let L = b.x * scale - pad;
+        let T = b.y * scale - pad;
+        let W = b.w * scale + pad * 2;
+        let HH = b.h * scale + pad * 2;
+        if (W < 44) {
+          L -= (44 - W) / 2;
+          W = 44;
+        }
+        if (HH < 44) {
+          T -= (44 - HH) / 2;
+          HH = 44;
+        }
+        return (
+          <div
+            data-selection
+            className="absolute rounded-md border-2 border-dashed border-blue-600 bg-blue-500/5"
+            style={{ left: L, top: T, width: W, height: HH, touchAction: 'none', cursor: 'move' }}
+            onPointerDown={(e) => startGesture(e, false, selA)}
+          >
+            {selA.type !== 'note' && (
+              <div
+                aria-label="Cambiar tamaño"
+                className="absolute -right-4 -bottom-4 size-8 rounded-full border-[3px] border-white bg-blue-600 shadow-lg"
+                style={{ touchAction: 'none', cursor: 'nwse-resize' }}
+                onPointerDown={(e) => startGesture(e, true, selA)}
+              />
+            )}
+          </div>
+        );
+      })()}
       {/* campos de formulario */}
       {p.fields.map((f, i) => {
         const [x, y, w, h] = f.rect.map((v) => v * scale);

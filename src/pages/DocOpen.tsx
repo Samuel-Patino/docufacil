@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { MoreVertical, Crop, FileType2, ScanText, Share2, ZoomIn, ZoomOut, Lock, FileQuestion } from 'lucide-react';
+import { MoreVertical, Crop, FileType2, ScanText, Share2, ZoomIn, ZoomOut, Lock, FileQuestion, Wrench } from 'lucide-react';
 import { getDoc, getDocBlob, getDocFile, addDoc } from '../lib/library';
 import type { DocMeta } from '../lib/db';
 import type { PDFDocumentProxy } from '../lib/pdf';
@@ -124,6 +124,7 @@ function ImageViewer({ doc, blob }: { doc: DocMeta; blob: Blob }) {
           <BarButton icon={<FileType2 />} label="A PDF" onClick={() => nav(`/tool/img2pdf?doc=${doc.id}`)} />
           <BarButton icon={<ScanText />} label="Texto" onClick={() => nav(`/tool/ocr?doc=${doc.id}`)} />
           <BarButton icon={<Share2 />} label="Compartir" onClick={async () => shareFiles([await getDocFile(doc.id)])} />
+          <BarButton icon={<Wrench />} label="Herramientas" onClick={() => setMenu(true)} />
           <div className="flex-1 sm:hidden" />
         </div>
       </div>

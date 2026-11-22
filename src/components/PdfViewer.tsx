@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, BookOpen, MoreVertical, ZoomIn, ZoomOut, PenLine, Highlighter, Share2, ChevronUp, ChevronDown, X, ScanText, Loader2, StickyNote, Files } from 'lucide-react';
+import { Search, BookOpen, MoreVertical, ZoomIn, ZoomOut, PenLine, Pencil, Wrench, Share2, ChevronUp, ChevronDown, X, ScanText, Loader2, StickyNote, Files } from 'lucide-react';
 import { pdfjs, renderPage, pageLines, linesToParagraphs, type PDFDocumentProxy, type PDFPageProxy, type Para } from '../lib/pdf';
 import type { DocMeta } from '../lib/db';
 import { TopBar, IconButton, Button, inputCls, Segmented, Spinner, BarButton } from './ui';
@@ -132,7 +132,11 @@ export function PdfViewer({ doc, pdf }: { doc: DocMeta; pdf: PDFDocumentProxy })
         <div className="mx-auto flex max-w-3xl items-center gap-1 px-2 py-2">
           {mode === 'pages' && (
             <>
-              <span className="min-w-16 px-2 text-center text-sm font-bold tabular-nums">
+              <span className="hidden min-w-16 px-2 text-center text-sm font-bold tabular-nums sm:inline-block">
+                {current} / {pdf.numPages}
+              </span>
+              {/* en el celular el número de página flota sobre el documento */}
+              <span className="pointer-events-none fixed left-3 z-20 rounded-full bg-black/65 px-3 py-1 text-sm font-bold text-white tabular-nums sm:hidden" style={{ bottom: 'calc(env(safe-area-inset-bottom) + 5.25rem)' }}>
                 {current} / {pdf.numPages}
               </span>
               <span className="hidden items-center sm:flex">
@@ -150,9 +154,10 @@ export function PdfViewer({ doc, pdf }: { doc: DocMeta; pdf: PDFDocumentProxy })
           )}
           <div className="flex-1" />
           <BarButton primary icon={<PenLine />} label="Firmar" onClick={() => nav(`/edit/${doc.id}?tool=sign`)} />
-          <BarButton icon={<Highlighter />} label="Anotar" onClick={() => nav(`/edit/${doc.id}`)} />
+          <BarButton icon={<Pencil />} label="Editar" onClick={() => nav(`/edit/${doc.id}`)} />
           <BarButton icon={<Files />} label="Páginas" onClick={() => nav(`/tool/organize?doc=${doc.id}`)} />
           <BarButton icon={<Share2 />} label="Compartir" onClick={share} />
+          <BarButton icon={<Wrench />} label="Herramientas" onClick={() => setMenu(true)} />
         </div>
       </div>
       <DocMenu doc={doc} open={menu} onClose={() => setMenu(false)} inViewer />
