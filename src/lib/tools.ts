@@ -11,7 +11,7 @@ export interface ToolDef {
   desc: string;
   icon: any;
   color: string;
-  group: 'convert' | 'organize' | 'security' | 'edit' | 'scan';
+  group: 'topdf' | 'frompdf' | 'organize' | 'security' | 'edit' | 'scan';
   accept?: string; // tipos de entrada
   input?: 'pdf' | 'image' | 'office' | 'any' | 'none';
   multiple?: boolean;
@@ -22,7 +22,8 @@ export interface ToolDef {
 export const GROUPS: { id: ToolDef['group']; title: string }[] = [
   { id: 'scan', title: 'Escanear' },
   { id: 'edit', title: 'Editar y firmar' },
-  { id: 'convert', title: 'Convertir' },
+  { id: 'topdf', title: 'Convertir a PDF' },
+  { id: 'frompdf', title: 'Convertir desde PDF' },
   { id: 'organize', title: 'Organizar y optimizar' },
   { id: 'security', title: 'Seguridad' },
 ];
@@ -45,20 +46,20 @@ export const TOOLS: ToolDef[] = [
   { id: 'editpdf', title: 'Editar PDF del dispositivo', desc: 'Abre de Archivos, edita y guarda', icon: FilePen, color: C.red, group: 'edit', input: 'none' },
 
   // Convertir
-  { id: 'img2pdf', title: 'Imágenes a PDF', desc: 'Una o varias fotos en uno o varios PDF', icon: FileImage, color: C.purple, group: 'convert', input: 'image', multiple: true, conv: ['img', 'pdf'] },
-  { id: 'word2pdf', title: 'Word a PDF', desc: 'Documentos .docx', icon: FileText, color: C.blue, group: 'convert', input: 'office', accept: 'word', multiple: true, conv: ['word', 'pdf'] },
-  { id: 'excel2pdf', title: 'Excel a PDF', desc: 'Hojas .xlsx y .csv', icon: FileSpreadsheet, color: C.green, group: 'convert', input: 'office', accept: 'excel', multiple: true, conv: ['excel', 'pdf'] },
-  { id: 'ppt2pdf', title: 'PowerPoint a PDF', desc: 'Presentaciones .pptx', icon: Presentation, color: C.orange, group: 'convert', input: 'office', accept: 'ppt', multiple: true, conv: ['ppt', 'pdf'] },
-  { id: 'txt2pdf', title: 'Texto a PDF', desc: 'Archivos .txt', icon: Type, color: C.slate, group: 'convert', input: 'office', accept: 'text', multiple: true, conv: ['txt', 'pdf'] },
-  { id: 'web2pdf', title: 'Página web a PDF', desc: 'Desde un enlace o archivo .html', icon: Globe, color: C.teal, group: 'convert', input: 'none', conv: ['web', 'pdf'] },
-  { id: 'pdf2word', title: 'PDF a Word', desc: 'Texto editable (.docx)', icon: FileText, color: C.blue, group: 'convert', input: 'pdf', conv: ['pdf', 'word'] },
-  { id: 'pdf2excel', title: 'PDF a Excel', desc: 'Tablas editables (.xlsx)', icon: FileSpreadsheet, color: C.green, group: 'convert', input: 'pdf', conv: ['pdf', 'excel'] },
-  { id: 'pdf2ppt', title: 'PDF a PowerPoint', desc: 'Diapositivas (.pptx)', icon: Presentation, color: C.orange, group: 'convert', input: 'pdf', conv: ['pdf', 'ppt'] },
-  { id: 'pdf2jpg', title: 'PDF a JPG', desc: 'Cada página como imagen', icon: Images, color: C.purple, group: 'convert', input: 'pdf', conv: ['pdf', 'jpg'] },
-  { id: 'extractimg', title: 'Extraer imágenes', desc: 'Imágenes del PDF en calidad original', icon: FileOutput, color: C.pink, group: 'convert', input: 'pdf', conv: ['pdf', 'img'] },
-  { id: 'pdf2txt', title: 'PDF a texto', desc: 'Archivo .txt', icon: Type, color: C.slate, group: 'convert', input: 'pdf', conv: ['pdf', 'txt'] },
-  { id: 'ocr', title: 'Reconocer texto (OCR)', desc: 'Saca el texto de fotos e imágenes', icon: ScanText, color: C.amber, group: 'convert', input: 'image', multiple: true, conv: ['img', 'txt'] },
-  { id: 'ocrpdf', title: 'PDF buscable (OCR)', desc: 'Permite buscar y copiar en escaneos', icon: FileSearch, color: C.teal, group: 'convert', input: 'pdf' },
+  { id: 'img2pdf', title: 'Imágenes a PDF', desc: 'Una o varias fotos en uno o varios PDF', icon: FileImage, color: C.purple, group: 'topdf', input: 'image', multiple: true, conv: ['img', 'pdf'] },
+  { id: 'word2pdf', title: 'Word a PDF', desc: 'Documentos .docx', icon: FileText, color: C.blue, group: 'topdf', input: 'office', accept: 'word', multiple: true, conv: ['word', 'pdf'] },
+  { id: 'excel2pdf', title: 'Excel a PDF', desc: 'Hojas .xlsx y .csv', icon: FileSpreadsheet, color: C.green, group: 'topdf', input: 'office', accept: 'excel', multiple: true, conv: ['excel', 'pdf'] },
+  { id: 'ppt2pdf', title: 'PowerPoint a PDF', desc: 'Presentaciones .pptx', icon: Presentation, color: C.orange, group: 'topdf', input: 'office', accept: 'ppt', multiple: true, conv: ['ppt', 'pdf'] },
+  { id: 'txt2pdf', title: 'Texto a PDF', desc: 'Archivos .txt', icon: Type, color: C.slate, group: 'topdf', input: 'office', accept: 'text', multiple: true, conv: ['txt', 'pdf'] },
+  { id: 'web2pdf', title: 'Página web a PDF', desc: 'Desde un enlace o archivo .html', icon: Globe, color: C.teal, group: 'topdf', input: 'none', conv: ['web', 'pdf'] },
+  { id: 'pdf2word', title: 'PDF a Word', desc: 'Texto editable (.docx)', icon: FileText, color: C.blue, group: 'frompdf', input: 'pdf', conv: ['pdf', 'word'] },
+  { id: 'pdf2excel', title: 'PDF a Excel', desc: 'Tablas editables (.xlsx)', icon: FileSpreadsheet, color: C.green, group: 'frompdf', input: 'pdf', conv: ['pdf', 'excel'] },
+  { id: 'pdf2ppt', title: 'PDF a PowerPoint', desc: 'Diapositivas (.pptx)', icon: Presentation, color: C.orange, group: 'frompdf', input: 'pdf', conv: ['pdf', 'ppt'] },
+  { id: 'pdf2jpg', title: 'PDF a JPG', desc: 'Cada página como imagen', icon: Images, color: C.purple, group: 'frompdf', input: 'pdf', conv: ['pdf', 'jpg'] },
+  { id: 'extractimg', title: 'Extraer imágenes', desc: 'Imágenes del PDF en calidad original', icon: FileOutput, color: C.pink, group: 'frompdf', input: 'pdf', conv: ['pdf', 'img'] },
+  { id: 'pdf2txt', title: 'PDF a texto', desc: 'Archivo .txt', icon: Type, color: C.slate, group: 'frompdf', input: 'pdf', conv: ['pdf', 'txt'] },
+  { id: 'ocr', title: 'Reconocer texto (OCR)', desc: 'Saca el texto de fotos e imágenes', icon: ScanText, color: C.amber, group: 'scan', input: 'image', multiple: true, conv: ['img', 'txt'] },
+  { id: 'ocrpdf', title: 'PDF buscable (OCR)', desc: 'Permite buscar y copiar en escaneos', icon: FileSearch, color: C.teal, group: 'frompdf', input: 'pdf' },
 
   // Organizar
   { id: 'merge', title: 'Unir PDF', desc: 'Varios PDF o imágenes en uno', icon: Combine, color: C.red, group: 'organize', input: 'pdf', multiple: true },
