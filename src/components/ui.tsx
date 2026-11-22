@@ -341,18 +341,52 @@ export function Chip({ active, children, onClick }: { active?: boolean; children
   );
 }
 
-export function ColorDots({ value, onChange, colors }: { value: string; onChange: (c: string) => void; colors: string[] }) {
+export function ColorDots({
+  value,
+  onChange,
+  colors,
+  custom,
+  nowrap,
+  small,
+}: {
+  value: string;
+  onChange: (c: string) => void;
+  colors: string[];
+  /** Agrega un botón con la paleta completa de colores */
+  custom?: boolean;
+  /** En una sola fila (barras de herramientas) */
+  nowrap?: boolean;
+  small?: boolean;
+}) {
+  const sz = small ? 'size-8' : 'size-9';
+  const isCustom = custom && !colors.some((c) => c.toLowerCase() === value.toLowerCase());
   return (
-    <div className="flex flex-wrap gap-2">
+    <div className={`flex gap-2 ${nowrap ? 'shrink-0 flex-nowrap items-center' : 'flex-wrap'}`}>
       {colors.map((c) => (
         <button
           key={c}
           aria-label={'Color ' + c}
           onClick={() => onChange(c)}
-          className={`size-9 rounded-full border-2 shadow-[inset_0_0_0_2px_rgba(255,255,255,0.35)] transition ${value === c ? 'scale-110 border-primary ring-2 ring-primary/40' : 'border-faint/50'}`}
+          className={`${sz} shrink-0 rounded-full border-2 shadow-[inset_0_0_0_2px_rgba(255,255,255,0.35)] transition ${value === c ? 'scale-110 border-primary ring-2 ring-primary/40' : 'border-faint/50'}`}
           style={{ background: c }}
         />
       ))}
+      {custom && (
+        <span
+          title="Más colores"
+          className={`relative ${sz} shrink-0 rounded-full p-[3px] transition ${isCustom ? 'scale-110 ring-2 ring-primary/40' : ''}`}
+          style={{ background: 'conic-gradient(#ef4444, #f59e0b, #eab308, #22c55e, #06b6d4, #3b82f6, #8b5cf6, #ec4899, #ef4444)' }}
+        >
+          <span className="block h-full w-full rounded-full border-2 border-white" style={{ background: isCustom ? value : 'transparent' }} />
+          <input
+            type="color"
+            aria-label="Elegir cualquier color"
+            value={/^#[0-9a-f]{6}$/i.test(value) ? value : '#000000'}
+            onChange={(e) => onChange(e.target.value)}
+            className="absolute inset-0 h-full w-full cursor-pointer rounded-full opacity-0"
+          />
+        </span>
+      )}
     </div>
   );
 }

@@ -7,6 +7,7 @@ import type { PDFDocumentProxy } from '../lib/pdf';
 import { openWithPassword } from '../lib/pdfAccess';
 import { PdfViewer } from '../components/PdfViewer';
 import { DocMenu } from '../components/DocMenu';
+import { DownloadFab } from '../components/DownloadFab';
 import { TopBar, IconButton, Button, Spinner, Empty, Chip, BarButton } from '../components/ui';
 import { useApp, toast, errMsg, withBusy } from '../lib/store';
 import { shareFiles } from '../lib/share';
@@ -94,7 +95,7 @@ function ImageViewer({ doc, blob }: { doc: DocMeta; blob: Blob }) {
   const [zoom, setZoom] = useState(1);
   const [menu, setMenu] = useState(false);
   return (
-    <div className="flex h-dvh flex-col">
+    <div className="fixed inset-0 flex flex-col bg-bg">
       <TopBar
         title={doc.name}
         back
@@ -104,7 +105,7 @@ function ImageViewer({ doc, blob }: { doc: DocMeta; blob: Blob }) {
           </IconButton>
         }
       />
-      <div className="min-h-0 flex-1 overflow-auto bg-surface-3/60 checker">
+      <div className="min-h-0 flex-1 overflow-auto overscroll-contain bg-surface-3/60 checker">
         <div className="flex min-h-full items-center justify-center p-4">
           {url && <img src={url} alt={doc.name} style={{ width: `${zoom * 100}%`, maxWidth: zoom === 1 ? '100%' : 'none' }} className="h-auto max-h-none rounded-lg object-contain shadow-pop" />}
         </div>
@@ -128,6 +129,7 @@ function ImageViewer({ doc, blob }: { doc: DocMeta; blob: Blob }) {
           <div className="flex-1 sm:hidden" />
         </div>
       </div>
+      <DownloadFab doc={doc} />
       <DocMenu doc={doc} open={menu} onClose={() => setMenu(false)} inViewer />
     </div>
   );
@@ -182,7 +184,7 @@ function FileViewer({ doc, blob }: { doc: DocMeta; blob: Blob }) {
   }
 
   return (
-    <div className="flex h-dvh flex-col">
+    <div className="fixed inset-0 flex flex-col bg-bg">
       <TopBar
         title={doc.name}
         back
@@ -192,7 +194,7 @@ function FileViewer({ doc, blob }: { doc: DocMeta; blob: Blob }) {
           </IconButton>
         }
       />
-      <div className="min-h-0 flex-1 overflow-auto bg-surface-3/50 p-3">
+      <div className="min-h-0 flex-1 overflow-auto overscroll-contain bg-surface-3/50 p-3">
         {sheets && sheets.length > 1 && (
           <div className="no-scrollbar mx-auto mb-3 flex max-w-5xl gap-2 overflow-x-auto">
             {sheets.map((s, i) => (
@@ -220,6 +222,7 @@ function FileViewer({ doc, blob }: { doc: DocMeta; blob: Blob }) {
           </IconButton>
         </div>
       </div>
+      <DownloadFab doc={doc} />
       <DocMenu doc={doc} open={menu} onClose={() => setMenu(false)} inViewer />
     </div>
   );

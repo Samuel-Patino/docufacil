@@ -222,7 +222,7 @@ export function SignatureCreator({ onSaved, onCancel }: { onSaved: (s: Signature
             {empty && <span className="pointer-events-none absolute inset-0 flex items-center justify-center text-lg font-semibold text-slate-400">Firma aquí con el dedo o el mouse</span>}
           </div>
           <div className="mt-2 flex items-center justify-between">
-            <ColorDots value={color} onChange={setColor} colors={INK} />
+            <ColorDots custom value={color} onChange={setColor} colors={INK} />
             <Button variant="ghost" size="sm" icon={<Eraser className="size-5" />} onClick={clear}>
               Borrar
             </Button>
@@ -236,7 +236,7 @@ export function SignatureCreator({ onSaved, onCancel }: { onSaved: (s: Signature
             {name || <span className="text-slate-300">Tu firma</span>}
           </div>
           <div className="mt-2">
-            <ColorDots value={color} onChange={setColor} colors={INK} />
+            <ColorDots custom value={color} onChange={setColor} colors={INK} />
           </div>
         </>
       )}

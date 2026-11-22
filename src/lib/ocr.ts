@@ -12,6 +12,8 @@ export interface OcrWord {
 export interface OcrLine {
   text: string;
   words: OcrWord[];
+  x0: number;
+  x1: number;
   y0: number;
   y1: number;
 }
@@ -19,6 +21,8 @@ export interface OcrResult {
   text: string;
   lines: OcrLine[];
   paragraphs: string[];
+  /** Líneas agrupadas por párrafo, con sus posiciones (para traducir sobre la imagen) */
+  paras: OcrLine[][];
   width: number;
   height: number;
   confidence: number;
@@ -78,23 +82,30 @@ export async function ocrImage(
     const data: any = r.data;
     const lines: OcrLine[] = [];
     const paragraphs: string[] = [];
+    const paras: OcrLine[][] = [];
     for (const b of data.blocks || []) {
       for (const p of b.paragraphs || []) {
         const ptxt: string[] = [];
+        const plines: OcrLine[] = [];
         for (const l of p.lines || []) {
           const words: OcrWord[] = (l.words || [])
             .filter((wd: any) => wd.text?.trim() && wd.confidence > 20)
             .map((wd: any) => ({ text: wd.text, x0: wd.bbox.x0, y0: wd.bbox.y0, x1: wd.bbox.x1, y1: wd.bbox.y1, conf: wd.confidence }));
           if (!words.length) continue;
           const text = words.map((x) => x.text).join(' ');
-          lines.push({ text, words, y0: l.bbox.y0, y1: l.bbox.y1 });
+          const line: OcrLine = { text, words, x0: Math.min(...words.map((w) => w.x0)), x1: Math.max(...words.map((w) => w.x1)), y0: l.bbox.y0, y1: l.bbox.y1 };
+          lines.push(line);
+          plines.push(line);
           ptxt.push(text);
         }
         // Conservamos los saltos de línea (recibos, listas, direcciones)
-        if (ptxt.length) paragraphs.push(ptxt.join('\n'));
+        if (ptxt.length) {
+          paragraphs.push(ptxt.join('\n'));
+          paras.push(plines);
+        }
       }
     }
-    return { text: (data.text || '').trim(), lines, paragraphs, width, height, confidence: data.confidence || 0 };
+    return { text: (data.text || '').trim(), lines, paragraphs, paras, width, height, confidence: data.confidence || 0 };
   } finally {
     progressCb = null;
   }

@@ -123,3 +123,15 @@ export async function translateText(text: string, to: string): Promise<{ text: s
 }
 
 export const googleTranslateUrl = (to: string) => `https://translate.google.com/?sl=auto&tl=${encodeURIComponent(to)}&op=translate`;
+
+/** Traduce varios bloques a la vez y devuelve uno por bloque. */
+export async function translateUnits(texts: string[], to: string): Promise<{ out: string[]; from: string; online: boolean }> {
+  const clean = texts.map((t) => t.replace(/\s*\n\s*/g, ' ').trim());
+  const r = await translateText(clean.join('\n'), to);
+  let out = r.text.split('\n');
+  if (out.length !== clean.length) {
+    out = [];
+    for (const t of clean) out.push((await translateText(t, to)).text);
+  }
+  return { out, from: r.from, online: r.online };
+}

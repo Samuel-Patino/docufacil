@@ -253,7 +253,7 @@ export default function PdfEditor() {
   const sel = annots.find((a) => a.id === selected);
 
   return (
-    <div className="flex h-dvh flex-col bg-bg">
+    <div className="fixed inset-0 flex flex-col bg-bg">
       <header className="safe-top border-b border-line bg-surface">
         <div className="mx-auto flex h-16 max-w-6xl items-center gap-1 px-2">
           <IconButton label="Salir" onClick={exit}>
@@ -274,7 +274,7 @@ export default function PdfEditor() {
 
       <div
         ref={scroller}
-        className="min-h-0 flex-1 overflow-auto bg-surface-3/60 px-3 py-4"
+        className="min-h-0 flex-1 overflow-auto overscroll-contain bg-surface-3/60 px-3 py-4"
         style={{ touchAction: gesturing ? 'none' : undefined }}
         onScroll={(e) => {
           const el = e.currentTarget;
@@ -324,7 +324,7 @@ export default function PdfEditor() {
       {/* Propiedades */}
       {!formMode && (
         <div className="border-t border-line bg-surface">
-          <div className="no-scrollbar mx-auto flex max-w-6xl items-center gap-3 overflow-x-auto px-3 py-2">
+          <div className="no-scrollbar mx-auto flex max-w-6xl items-center gap-3 overflow-x-auto px-3 py-2 [&_button]:whitespace-nowrap [&>*]:shrink-0">
             {tool && (
               <Button size="sm" icon={<Check className="size-5" />} onClick={() => setTool(null)}>
                 Listo
@@ -365,16 +365,16 @@ export default function PdfEditor() {
                     Editar comentario
                   </Button>
                 )}
-                {'color' in sel && sel.type !== 'highlight' && sel.type !== 'whiteout' && <ColorDots value={(sel as any).color} colors={COLORS} onChange={(c) => update(sel.id, { color: c } as any)} />}
+                {'color' in sel && sel.type !== 'highlight' && sel.type !== 'whiteout' && <ColorDots nowrap small custom value={(sel as any).color} colors={COLORS} onChange={(c) => update(sel.id, { color: c } as any)} />}
                 <Button variant="danger" size="sm" icon={<Trash2 className="size-5" />} onClick={() => remove(sel.id)}>
                   Eliminar
                 </Button>
               </>
             ) : tool === 'highlight' || tool === 'marker' ? (
-              <ColorDots value={hl} colors={HL} onChange={setHl} />
+              <ColorDots nowrap small custom value={hl} colors={HL} onChange={setHl} />
             ) : tool === 'pen' || tool === 'rect' || tool === 'arrow' || tool === 'text' || tool === 'note' ? (
               <>
-                <ColorDots value={color} colors={COLORS.slice(0, 6)} onChange={setColor} />
+                <ColorDots nowrap small custom value={color} colors={COLORS.slice(0, 6)} onChange={setColor} />
                 {tool === 'text' ? (
                   <div className="w-40 shrink-0">
                     <Slider label="Tamaño" value={fontSize} min={8} max={48} onChange={setFontSize} />
@@ -386,7 +386,7 @@ export default function PdfEditor() {
                 ) : null}
               </>
             ) : (
-              <span className="text-sm text-soft">
+              <span className="min-w-0 shrink! text-sm leading-snug text-soft">
                 {tool === null ? 'Toca una anotación para seleccionarla, o elige una herramienta abajo.' : tool === 'eraser' ? 'Toca una anotación para borrarla.' : 'Arrastra para tapar contenido con blanco.'}
               </span>
             )}

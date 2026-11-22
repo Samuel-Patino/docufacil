@@ -5,6 +5,7 @@ import { pdfjs, renderPage, pageLines, linesToParagraphs, type PDFDocumentProxy,
 import type { DocMeta } from '../lib/db';
 import { TopBar, IconButton, Button, inputCls, Segmented, Spinner, BarButton } from './ui';
 import { DocMenu } from './DocMenu';
+import { DownloadFab } from './DownloadFab';
 import { getDocFile } from '../lib/library';
 import { shareFiles } from '../lib/share';
 import { useApp, toast, errMsg } from '../lib/store';
@@ -78,7 +79,7 @@ export function PdfViewer({ doc, pdf }: { doc: DocMeta; pdf: PDFDocumentProxy })
   const pageW = width * zoom;
 
   return (
-    <div className="flex h-dvh flex-col">
+    <div className="fixed inset-0 flex flex-col bg-bg">
       <TopBar
         title={doc.name}
         sub={`${pdf.numPages} página(s)`}
@@ -119,7 +120,7 @@ export function PdfViewer({ doc, pdf }: { doc: DocMeta; pdf: PDFDocumentProxy })
       {mode === 'read' ? (
         <ReadingView pdf={pdf} />
       ) : (
-        <div ref={scroller} className="min-h-0 flex-1 overflow-auto bg-surface-3/60 px-3 py-4">
+        <div ref={scroller} className="min-h-0 flex-1 overflow-auto overscroll-contain bg-surface-3/60 px-3 py-4">
           <div className="mx-auto flex flex-col items-center gap-4" style={{ width: pageW }}>
             {Array.from({ length: pdf.numPages }, (_, i) => (
               <PageView key={i} pdf={pdf} n={i + 1} width={pageW} query={searchOpen ? query : ''} onVisible={setCurrent} />
@@ -160,6 +161,7 @@ export function PdfViewer({ doc, pdf }: { doc: DocMeta; pdf: PDFDocumentProxy })
           <BarButton icon={<Wrench />} label="Herramientas" onClick={() => setMenu(true)} />
         </div>
       </div>
+      {mode === 'pages' && <DownloadFab doc={doc} />}
       <DocMenu doc={doc} open={menu} onClose={() => setMenu(false)} inViewer />
     </div>
   );
@@ -315,7 +317,7 @@ function ReadingView({ pdf }: { pdf: PDFDocumentProxy }) {
   const empty = useMemo(() => pages.length === pdf.numPages && pages.every((p) => !p), [pages]);
 
   return (
-    <div className={`min-h-0 flex-1 overflow-auto ${theme}`}>
+    <div className={`min-h-0 flex-1 overflow-auto overscroll-contain ${theme}`}>
       <div className="sticky top-0 z-10 flex flex-wrap items-center justify-center gap-3 border-b border-line bg-surface px-3 py-2 text-text">
         <Segmented
           value={prefs.readerTheme}

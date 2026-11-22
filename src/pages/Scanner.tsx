@@ -59,6 +59,10 @@ export default function Scanner() {
   const [idFront, setIdFront] = useState<ScanPage | null>(null);
   const [mrz, setMrz] = useState<MrzData | null | 'none'>(null);
   const liveQuad = useRef<Quad | null>(null);
+  const candQuad = useRef<Quad | null>(null);
+  const hits = useRef(0);
+  const misses = useRef(0);
+  const lastArea = useRef(0);
   const stableSince = useRef(0);
   const lastShot = useRef(0);
   const shotQuad = useRef<Quad | null>(null);
@@ -173,9 +177,15 @@ export default function Scanner() {
         small.height = Math.round(v.videoHeight * s);
         sctx.drawImage(v, 0, 0, small.width, small.height);
         const m = modeRef.current;
-        const det = detectDocument(cv, small, { curve: m === 'book', minArea: m === 'idcard' || m === 'passport' ? 0.06 : 0.12 });
+        const det = detectDocument(cv, small, { curve: m === 'book', minArea: m === 'idcard' || m === 'passport' ? 0.06 : 0.12, strict: true });
         const prev = liveQuad.current;
-        let q: Quad | null = det?.quad ?? null;
+        // Sólo se muestra el marco cuando la hoja se detecta igual en varios cuadros seguidos
+        const raw: Quad | null = det?.quad ?? null;
+        if (raw && candQuad.current && quadDistance(raw, candQuad.current) < 0.08) hits.current++;
+        else hits.current = raw ? 1 : 0;
+        candQuad.current = raw;
+        misses.current = raw ? 0 : misses.current + 1;
+        let q: Quad | null = raw && (hits.current >= 3 || (prev && quadDistance(raw, prev) < 0.08)) ? raw : !raw && misses.current <= 1 ? prev : null;
         if (q && prev && quadDistance(q, prev) < 0.08) {
           // suavizado para que el marco no tiemble
           q = q.map((p, i) => ({ x: prev[i].x * 0.55 + p.x * 0.45, y: prev[i].y * 0.55 + p.y * 0.45 })) as Quad;
@@ -199,7 +209,8 @@ export default function Scanner() {
           setHint({ text: '¡Capturada! Pon la siguiente página o toca Listo', tone: 'ok' });
         } else {
           if (moved) stableSince.current = now;
-          const area = det!.area;
+          if (det) lastArea.current = det.area;
+          const area = lastArea.current;
           if (area < 0.2 && m !== 'idcard' && m !== 'passport') setHint({ text: 'Acércate un poco más', tone: 'warn' });
           else setHint({ text: prefsRef.current.autoCapture ? 'Mantén quieto…' : 'Documento detectado', tone: 'ok' });
           const held = stableSince.current ? now - stableSince.current : 0;
@@ -233,13 +244,15 @@ export default function Scanner() {
     if (!c || !v) return;
     const dpr = devicePixelRatio || 1;
     const ew = c.clientWidth, eh = c.clientHeight;
-    if (c.width !== Math.round(ew * dpr)) {
+    // El área del video cambia de alto (p. ej. al aparecer "Listo"): se ajusta el lienzo completo
+    if (c.width !== Math.round(ew * dpr) || c.height !== Math.round(eh * dpr)) {
       c.width = Math.round(ew * dpr);
       c.height = Math.round(eh * dpr);
     }
     const ctx = c.getContext('2d')!;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, c.width, c.height);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, ew, eh);
     const vw = v.videoWidth, vh = v.videoHeight;
     const s = Math.max(ew / vw, eh / vh);
     const ox = (ew - vw * s) / 2, oy = (eh - vh * s) / 2;

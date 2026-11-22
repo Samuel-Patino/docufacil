@@ -77,7 +77,7 @@ function edgeMids(quad: Quad, contour: Pt[]): [Pt, Pt, Pt, Pt] {
  * Busca el contorno de documento más grande en un canvas pequeño (≈ 400 px).
  * Devuelve las esquinas normalizadas 0..1.
  */
-export function detectDocument(cv: any, canvas: HTMLCanvasElement, opts: { curve?: boolean; minArea?: number } = {}): Detection | null {
+export function detectDocument(cv: any, canvas: HTMLCanvasElement, opts: { curve?: boolean; minArea?: number; strict?: boolean } = {}): Detection | null {
   const W = canvas.width, H = canvas.height;
   const frameArea = W * H;
   const minArea = (opts.minArea ?? 0.12) * frameArea;
@@ -93,7 +93,70 @@ export function detectDocument(cv: any, canvas: HTMLCanvasElement, opts: { curve
     cv.morphologyEx(gray, gray, cv.MORPH_CLOSE, kernel);
     cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
 
-    let best: { quad: Pt[]; area: number; contour: Pt[] } | null = null;
+    let best: { quad: Pt[]; area: number; contour: Pt[]; score: number } | null = null;
+    let edgeMap: any = null;
+    const strict = !!opts.strict;
+
+    /**
+     * Evalúa si un cuadrilátero parece de verdad una hoja: ángulos razonables,
+     * lados opuestos parecidos, bordes visibles a lo largo de los 4 lados y
+     * diferencia de luz entre el papel y lo que lo rodea. Devuelve 0 si no sirve.
+     */
+    const judge = (q: Pt[], qa: number): number => {
+      const L = (i: number) => Math.hypot(q[(i + 1) % 4].x - q[i].x, q[(i + 1) % 4].y - q[i].y);
+      for (let i = 0; i < 4; i++) {
+        const a = q[(i + 3) % 4], b = q[i], c = q[(i + 1) % 4];
+        const v1x = a.x - b.x, v1y = a.y - b.y, v2x = c.x - b.x, v2y = c.y - b.y;
+        const cos = (v1x * v2x + v1y * v2y) / ((Math.hypot(v1x, v1y) * Math.hypot(v2x, v2y)) || 1);
+        const ang = (Math.acos(Math.max(-1, Math.min(1, cos))) * 180) / Math.PI;
+        if (ang < (strict ? 55 : 40) || ang > (strict ? 125 : 140)) return 0;
+      }
+      const r1 = Math.min(L(0), L(2)) / (Math.max(L(0), L(2)) || 1);
+      const r2 = Math.min(L(1), L(3)) / (Math.max(L(1), L(3)) || 1);
+      if (r1 < (strict ? 0.55 : 0.35) || r2 < (strict ? 0.55 : 0.35)) return 0;
+      if (Math.min(L(0), L(1)) / (Math.max(L(0), L(1)) || 1) < 0.12) return 0;
+      if (!strict) return qa;
+      // En vivo: la hoja debe verse completa dentro del cuadro
+      const m = Math.min(W, H) * 0.012;
+      if (q.some((p) => p.x < m || p.y < m || p.x > W - m || p.y > H - m)) return 0;
+      // Bordes reales a lo largo de los lados
+      let hits = 0, total = 0;
+      if (edgeMap) {
+        for (let i = 0; i < 4; i++) {
+          const a = q[i], b = q[(i + 1) % 4];
+          for (let t = 0.1; t <= 0.9; t += 0.04) {
+            const x = Math.round(a.x + (b.x - a.x) * t), y = Math.round(a.y + (b.y - a.y) * t);
+            let on = false;
+            for (let dy = -2; dy <= 2 && !on; dy++)
+              for (let dx = -2; dx <= 2 && !on; dx++) {
+                const xx = x + dx, yy = y + dy;
+                if (xx >= 0 && yy >= 0 && xx < W && yy < H && edgeMap.ucharPtr(yy, xx)[0]) on = true;
+              }
+            total++;
+            if (on) hits++;
+          }
+        }
+      }
+      const support = total ? hits / total : 0;
+      if (support < 0.55) return 0;
+      // Contraste papel / alrededor
+      const inside = cv.Mat.zeros(H, W, cv.CV_8U);
+      const ring = new cv.Mat();
+      const poly = cv.matFromArray(4, 1, cv.CV_32SC2, q.flatMap((p) => [Math.round(p.x), Math.round(p.y)]));
+      const pv = new cv.MatVector();
+      pv.push_back(poly);
+      cv.fillPoly(inside, pv, new cv.Scalar(255));
+      const rk = Math.max(5, Math.round(Math.min(W, H) * 0.05) | 1);
+      const kr = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(rk, rk));
+      cv.dilate(inside, ring, kr);
+      cv.subtract(ring, inside, ring);
+      const mIn = cv.mean(gray, inside)[0];
+      const mOut = cv.mean(gray, ring)[0];
+      [inside, ring, poly, pv, kr].forEach((x) => x.delete());
+      const contrast = Math.abs(mIn - mOut);
+      if (contrast < 9 && support < 0.8) return 0;
+      return qa * support * Math.min(1.5, 0.6 + contrast / 40);
+    };
 
     const tryEdges = (edges: any) => {
       const contours = keep(new cv.MatVector());
@@ -123,8 +186,10 @@ export function detectDocument(cv: any, canvas: HTMLCanvasElement, opts: { curve
           quad = pts.map((p: any) => ({ x: p.x, y: p.y }));
         }
         if (quad && isConvex(orderQuad(quad))) {
-          const qa = polyArea(orderQuad(quad));
-          if (qa >= minArea && (!best || qa > best.area)) best = { quad, area: qa, contour: matToPts(c) };
+          const oq = orderQuad(quad);
+          const qa = polyArea(oq);
+          const score = qa >= minArea ? judge(oq, qa) : 0;
+          if (score > 0 && (!best || score > best.score)) best = { quad, area: qa, contour: matToPts(c), score };
         }
         hull.delete();
         c.delete();
@@ -136,6 +201,7 @@ export function detectDocument(cv: any, canvas: HTMLCanvasElement, opts: { curve
     cv.Canny(gray, edges, 30, 110);
     const k3 = keep(cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3)));
     cv.dilate(edges, edges, k3, new cv.Point(-1, -1), 2);
+    edgeMap = edges;
     tryEdges(edges);
 
     // 2) Papel claro sobre fondo oscuro (umbral de Otsu)
@@ -146,7 +212,7 @@ export function detectDocument(cv: any, canvas: HTMLCanvasElement, opts: { curve
     }
 
     if (!best) return null;
-    const b = best as { quad: Pt[]; area: number; contour: Pt[] };
+    const b = best as { quad: Pt[]; area: number; contour: Pt[]; score: number };
     // El contorno queda un poco por fuera del papel (por la dilatación): lo encogemos levemente
     const oq = orderQuad(b.quad);
     const cx = oq.reduce((s, p) => s + p.x, 0) / 4, cy = oq.reduce((s, p) => s + p.y, 0) / 4;
