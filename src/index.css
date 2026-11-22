@@ -1,0 +1,217 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/nunito';
+@import '@fontsource/dancing-script/600.css';
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --bg: #f4f7fb;
+  --surface: #ffffff;
+  --surface-2: #eef2f8;
+  --surface-3: #e2e8f2;
+  --text: #0f1b2d;
+  --text-soft: #4a5870;
+  --text-faint: #7b879b;
+  --border: #dbe2ec;
+  --primary: #2563eb;
+  --primary-strong: #1d4ed8;
+  --primary-soft: #dbe8ff;
+  --on-primary: #ffffff;
+  --accent: #0d9488;
+  --accent-soft: #d5f5f1;
+  --danger: #dc2626;
+  --danger-soft: #fde2e2;
+  --warn: #b45309;
+  --warn-soft: #fdf0d5;
+  --ok: #15803d;
+  --ok-soft: #dcfce7;
+  --shadow: 0 1px 2px rgb(15 27 45 / 0.06), 0 4px 16px rgb(15 27 45 / 0.06);
+  --shadow-lg: 0 10px 40px rgb(15 27 45 / 0.18);
+  color-scheme: light;
+}
+
+.dark {
+  --bg: #0b1220;
+  --surface: #131c2e;
+  --surface-2: #1a2539;
+  --surface-3: #243148;
+  --text: #eef3fb;
+  --text-soft: #b3bfd3;
+  --text-faint: #8290a8;
+  --border: #2a3750;
+  --primary: #5b8cff;
+  --primary-strong: #82a8ff;
+  --primary-soft: #1d2d52;
+  --on-primary: #0b1220;
+  --accent: #2dd4bf;
+  --accent-soft: #12352f;
+  --danger: #f87171;
+  --danger-soft: #3b1a1d;
+  --warn: #fbbf24;
+  --warn-soft: #3a2c10;
+  --ok: #4ade80;
+  --ok-soft: #12321f;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 4px 16px rgb(0 0 0 / 0.25);
+  --shadow-lg: 0 10px 40px rgb(0 0 0 / 0.5);
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-text: var(--text);
+  --color-soft: var(--text-soft);
+  --color-faint: var(--text-faint);
+  --color-line: var(--border);
+  --color-primary: var(--primary);
+  --color-primary-strong: var(--primary-strong);
+  --color-primary-soft: var(--primary-soft);
+  --color-on-primary: var(--on-primary);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --font-sans: 'Nunito Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-sign: 'Dancing Script', cursive;
+  --shadow-card: var(--shadow);
+  --shadow-pop: var(--shadow-lg);
+}
+
+html {
+  font-size: 100%;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+html[data-text='large'] { font-size: 112.5%; }
+html[data-text='xlarge'] { font-size: 125%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  overscroll-behavior-y: none;
+}
+
+#root { min-height: 100dvh; }
+
+* { box-sizing: border-box; }
+
+:focus-visible {
+  outline: 3px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+
+.safe-top { padding-top: env(safe-area-inset-top); }
+.safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { scrollbar-width: none; }
+
+.checker {
+  background-image:
+    linear-gradient(45deg, #0000000d 25%, transparent 25%),
+    linear-gradient(-45deg, #0000000d 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #0000000d 75%),
+    linear-gradient(-45deg, transparent 75%, #0000000d 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
+input[type='range'] {
+  accent-color: var(--primary);
+  height: 32px;
+}
+
+/* Capa de texto de pdf.js (selección y búsqueda) */
+.textLayer {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  caret-color: CanvasText;
+  z-index: 0;
+}
+.textLayer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+.textLayer {
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+.textLayer > :not(.markedContent),
+.textLayer .markedContent span:not(.markedContent) {
+  z-index: 1;
+  --font-height: 0;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1;
+  --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+.textLayer .markedContent { display: contents; }
+.textLayer ::selection { background: rgb(37 99 235 / 0.3); }
+.textLayer br::selection { background: transparent; }
+.textLayer .endOfContent {
+  display: block;
+  position: absolute;
+  inset: 100% 0 0;
+  z-index: 0;
+  cursor: default;
+  user-select: none;
+}
+.textLayer .hl-match {
+  background: rgb(250 204 21 / 0.55);
+  border-radius: 2px;
+}
+.textLayer .hl-match.current { background: rgb(249 115 22 / 0.65); }
+
+/* Vista previa de Word / Excel */
+.docx-view img { max-width: 100%; height: auto; }
+.docx-view p { margin: 0 0 0.6em; }
+.docx-view h1, .docx-view h2, .docx-view h3 { font-weight: 800; margin: 0.8em 0 0.4em; }
+.docx-view h1 { font-size: 1.6em; }
+.docx-view h2 { font-size: 1.3em; }
+.docx-view ul, .docx-view ol { padding-left: 1.4em; margin: 0 0 0.6em; list-style: revert; }
+.docx-view table, .sheet-view table { border-collapse: collapse; margin: 0.5em 0; }
+.docx-view td, .docx-view th, .sheet-view td, .sheet-view th { border: 1px solid #cbd5e1; padding: 4px 8px; vertical-align: top; }
+.sheet-view tr:first-child td { background: #eef2ff; font-weight: 700; }
+
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+.animate-pop { animation: pop-in 0.18s ease-out; }
+
+@keyframes sheet-up {
+  from { transform: translateY(100%); }
+  to { transform: none; }
+}
+.animate-sheet { animation: sheet-up 0.22s cubic-bezier(0.2, 0.9, 0.3, 1); }
+
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+.animate-fade { animation: fade-in 0.15s ease-out; }
+
+@keyframes shutter {
+  0% { opacity: 0.85; }
+  100% { opacity: 0; }
+}
+.animate-shutter { animation: shutter 0.35s ease-out forwards; }
