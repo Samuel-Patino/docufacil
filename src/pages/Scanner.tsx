@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { X, Zap, ZapOff, Image as ImageIcon, Check, Sparkles, CameraOff, Loader2, Copy, MoreHorizontal } from 'lucide-react';
 import { useApp, toast, confirmDialog, setBusy } from '../lib/store';
 import { loadCV } from '../lib/cv';
-import { detectDocument, detectInBlob, quadDistance } from '../lib/detect';
+import { detectDocument, detectInBlob, quadDistance, warpQuad, polyArea, isConvex } from '../lib/detect';
 import { SCAN_MODES, DEFAULT_ADJ, ID_CARD_ASPECT, PASSPORT_ASPECT, type ScanMode, type ScanPage, type Quad, type Pt } from '../lib/scanTypes';
 import { pageThumb, renderScanPage, newCanvas, blobToCanvas, scaleCanvas } from '../lib/imaging';
 import { pendingTranslate } from '../lib/translate';
@@ -162,82 +162,195 @@ export default function Scanner() {
     }
   };
 
-  // ----- detección en tiempo real -----
+  // ----- detección y seguimiento en tiempo real (en un hilo aparte) -----
   const aspectFor = (m: ScanMode) => (m === 'idcard' ? ID_CARD_ASPECT : m === 'passport' ? PASSPORT_ASPECT : undefined);
+  const resetTrack = useRef(false);
+  const hintRef = useRef('');
+  const stableRef = useRef(0);
+  const showHint = (h: Hint) => {
+    const key = h.text + h.tone;
+    if (hintRef.current !== key) {
+      hintRef.current = key;
+      setHint(h);
+    }
+  };
+  const showStable = (p: number) => {
+    if (Math.abs(stableRef.current - p) > 0.02 || (p === 0 && stableRef.current !== 0)) {
+      stableRef.current = p;
+      setStableP(p);
+    }
+  };
+
+  /** Con el marco actual: avisos, captura automática y lo que se dibuja. */
+  function onQuad(q: Quad | null) {
+    const m = modeRef.current;
+    const prev = liveQuad.current;
+    const moved = !q || !prev || quadDistance(q, prev) > 0.018;
+    liveQuad.current = q;
+    targetQuad.current = q;
+    const now = performance.now();
+    // Tras una captura automática, esperamos a que cambie la página antes de volver a disparar
+    if (shotQuad.current && (!q || quadDistance(q, shotQuad.current) > 0.12)) {
+      if (!q) {
+        if (!lostSince.current) lostSince.current = now;
+        if (now - lostSince.current > 500) shotQuad.current = null;
+      } else shotQuad.current = null;
+    } else lostSince.current = 0;
+    if (!q) {
+      stableSince.current = 0;
+      showStable(0);
+      showHint({ text: m === 'idcard' || m === 'passport' ? 'Coloca el documento dentro del marco' : 'Buscando el documento…', tone: 'info' });
+      return;
+    }
+    if (shotQuad.current && prefsRef.current.autoCapture) {
+      showStable(0);
+      showHint({ text: '¡Capturada! Pon la siguiente página o toca Listo', tone: 'ok' });
+      return;
+    }
+    if (moved) stableSince.current = now;
+    const area = polyArea(q);
+    if (area < 0.2 && m !== 'idcard' && m !== 'passport') showHint({ text: 'Acércate un poco más', tone: 'warn' });
+    else showHint({ text: prefsRef.current.autoCapture ? 'Mantén quieto…' : 'Documento detectado', tone: 'ok' });
+    const held = stableSince.current ? now - stableSince.current : 0;
+    const p = Math.min(1, held / 1300);
+    showStable(prefsRef.current.autoCapture ? p : 0);
+    if (prefsRef.current.autoCapture && p >= 1 && now - lastShot.current > 1500 && area >= 0.15) {
+      lastShot.current = now;
+      stableSince.current = 0;
+      shotQuad.current = q;
+      captureRef.current();
+    }
+  }
+  const onQuadRef = useRef(onQuad);
+  onQuadRef.current = onQuad;
 
   useEffect(() => {
-    if (!ready || !cvReady) return;
-    const cv = (window as any).__cvReady;
-    const small = document.createElement('canvas');
-    const sctx = small.getContext('2d', { willReadFrequently: true })!;
+    if (!ready) return;
     let alive = true;
     let timer: any;
+    const small = document.createElement('canvas');
+    const sctx = small.getContext('2d', { willReadFrequently: true })!;
+    let worker: Worker | null = null;
+    let wReady = false;
+    let fallback = false;
+    let busySince = 0;
+    let lastDet = 0;
+    let tracked: Quad | null = null; // marco actual: sigue el movimiento de la cámara
+    let cand: Quad | null = null; // detección nueva que espera confirmación
+    let confirmedAt = 0;
+    const DETECT_EVERY = 350; // ms entre búsquedas completas de bordes
+
+    const sane = (q: Quad | null): Quad | null => {
+      if (!q || !isConvex(q)) return null;
+      const a = polyArea(q);
+      if (a < 0.02 || a > 1.5) return null;
+      return q.some((p) => p.x < -0.3 || p.y < -0.3 || p.x > 1.3 || p.y > 1.3) ? null : q;
+    };
+    // Une la búsqueda de bordes con el seguimiento: confirma, corrige o suelta el marco
+    const fuse = (det: { quad: Quad } | null, now: number) => {
+      if (det) {
+        const d = det.quad;
+        if (tracked && quadDistance(d, tracked) < 0.15) {
+          tracked = d;
+          confirmedAt = now;
+        } else if (cand && quadDistance(d, cand) < 0.1) {
+          tracked = d;
+          confirmedAt = now;
+          cand = null;
+        } else cand = d;
+      } else {
+        cand = null;
+        if (now - confirmedAt > 1100) tracked = null;
+      }
+    };
+    const grab = (v: HTMLVideoElement) => {
+      const s = 400 / Math.max(v.videoWidth, v.videoHeight);
+      const w = Math.round(v.videoWidth * s), h = Math.round(v.videoHeight * s);
+      if (small.width !== w || small.height !== h) {
+        small.width = w;
+        small.height = h;
+      }
+      sctx.drawImage(v, 0, 0, w, h);
+      return sctx.getImageData(0, 0, w, h);
+    };
+    const detOpts = () => {
+      const m = modeRef.current;
+      return { minArea: m === 'idcard' || m === 'passport' ? 0.06 : 0.1, strict: true };
+    };
+
+    try {
+      worker = new Worker(new URL('../lib/scanWorker.ts', import.meta.url), { type: 'module' });
+      worker.onmessage = (e) => {
+        const m = e.data;
+        if (m.type === 'ready') {
+          wReady = true;
+          setCvReady(true);
+          return;
+        }
+        if (m.type === 'error') {
+          fallback = true;
+          return;
+        }
+        if (m.type !== 'result' || !alive) return;
+        busySince = 0;
+        const now = performance.now();
+        if (resetTrack.current) {
+          resetTrack.current = false;
+          tracked = cand = null;
+        }
+        if (m.H) {
+          tracked = sane(tracked && warpQuad(tracked, m.H, m.w, m.h));
+          cand = sane(cand && warpQuad(cand, m.H, m.w, m.h));
+        }
+        if (m.ran) fuse(m.det, now);
+        onQuadRef.current(tracked);
+        if (import.meta.env.DEV) (window as any).__scanDbg = { tracked, cand, moved: !!m.H, trackMs: Math.round(m.trackMs), detMs: Math.round(m.detMs) };
+      };
+      worker.onerror = () => {
+        fallback = true;
+      };
+      worker.postMessage({ type: 'init', url: new URL('vendor/opencv.js', document.baseURI).href });
+    } catch {
+      fallback = true;
+    }
+
     const loop = () => {
       if (!alive) return;
       const v = videoRef.current;
+      const now = performance.now();
+      if (busySince && now - busySince > 2500) busySince = 0; // por si se perdió una respuesta
       if (v && v.videoWidth && !capturingRef.current) {
-        const s = 400 / Math.max(v.videoWidth, v.videoHeight);
-        small.width = Math.round(v.videoWidth * s);
-        small.height = Math.round(v.videoHeight * s);
-        sctx.drawImage(v, 0, 0, small.width, small.height);
-        const m = modeRef.current;
-        const det = detectDocument(cv, small, { curve: m === 'book', minArea: m === 'idcard' || m === 'passport' ? 0.06 : 0.12, strict: true });
-        const prev = liveQuad.current;
-        // Sólo se muestra el marco cuando la hoja se detecta igual en varios cuadros seguidos
-        const raw: Quad | null = det?.quad ?? null;
-        if (raw && candQuad.current && quadDistance(raw, candQuad.current) < 0.08) hits.current++;
-        else hits.current = raw ? 1 : 0;
-        candQuad.current = raw;
-        misses.current = raw ? 0 : misses.current + 1;
-        let q: Quad | null = raw && (hits.current >= 2 || (prev && quadDistance(raw, prev) < 0.08)) ? raw : !raw && misses.current <= 3 ? prev : null;
-        if (q && prev && quadDistance(q, prev) < 0.08) {
-          // suavizado para que el marco no tiemble
-          q = q.map((p, i) => ({ x: prev[i].x * 0.55 + p.x * 0.45, y: prev[i].y * 0.55 + p.y * 0.45 })) as Quad;
-        }
-        const moved = !q || !prev || quadDistance(q, prev) > 0.018;
-        liveQuad.current = q;
-        const now = performance.now();
-        // Tras una captura automática, esperamos a que cambie la página antes de volver a disparar
-        if (shotQuad.current && (!q || quadDistance(q, shotQuad.current) > 0.12)) {
-          if (!q) {
-            if (!lostSince.current) lostSince.current = now;
-            if (now - lostSince.current > 500) shotQuad.current = null;
-          } else shotQuad.current = null;
-        } else lostSince.current = 0;
-        if (!q) {
-          stableSince.current = 0;
-          setStableP(0);
-          setHint({ text: m === 'idcard' || m === 'passport' ? 'Coloca el documento dentro del marco' : 'Buscando el documento…', tone: 'info' });
-        } else if (shotQuad.current && prefsRef.current.autoCapture) {
-          setStableP(0);
-          setHint({ text: '¡Capturada! Pon la siguiente página o toca Listo', tone: 'ok' });
-        } else {
-          if (moved) stableSince.current = now;
-          if (det) lastArea.current = det.area;
-          const area = lastArea.current;
-          if (area < 0.2 && m !== 'idcard' && m !== 'passport') setHint({ text: 'Acércate un poco más', tone: 'warn' });
-          else setHint({ text: prefsRef.current.autoCapture ? 'Mantén quieto…' : 'Documento detectado', tone: 'ok' });
-          const held = stableSince.current ? now - stableSince.current : 0;
-          const need = 1300;
-          const p = Math.min(1, held / need);
-          setStableP(prefsRef.current.autoCapture ? p : 0);
-          if (prefsRef.current.autoCapture && p >= 1 && now - lastShot.current > 1500 && area >= 0.15) {
-            lastShot.current = now;
-            stableSince.current = 0;
-            shotQuad.current = q;
-            captureRef.current();
+        if (!fallback && wReady && !busySince && worker) {
+          const img = grab(v);
+          const detect = now - lastDet >= DETECT_EVERY;
+          if (detect) lastDet = now;
+          busySince = now;
+          worker.postMessage({ type: 'frame', w: img.width, h: img.height, buf: img.data.buffer, detect, quad: tracked, opts: detOpts() }, [img.data.buffer]);
+        } else if (fallback && now - lastDet >= 450) {
+          // Sin hilo aparte: sólo búsqueda de bordes, cada 450 ms
+          const cv = (window as any).__cvReady;
+          if (cv) {
+            lastDet = now;
+            if (resetTrack.current) {
+              resetTrack.current = false;
+              tracked = cand = null;
+            }
+            const img = grab(v);
+            fuse(detectDocument(cv, img, detOpts()), now);
+            setCvReady(true);
+            onQuadRef.current(tracked);
           }
         }
-        targetQuad.current = q;
       }
-      timer = setTimeout(loop, 110);
+      timer = setTimeout(loop, 33);
     };
     loop();
     return () => {
       alive = false;
       clearTimeout(timer);
+      worker?.terminate();
     };
-  }, [ready, cvReady]);
+  }, [ready]);
 
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
@@ -313,7 +426,7 @@ export default function Scanner() {
       if (t) {
         if (!d || dispAlpha.current < 0.05) d = grow(t, 1.05);
         else {
-          const k = 1 - Math.exp(-dt / 75);
+          const k = 1 - Math.exp(-dt / 50);
           d = d.map((p, i) => ({ x: p.x + (t[i].x - p.x) * k, y: p.y + (t[i].y - p.y) * k })) as Quad;
         }
         dispAlpha.current = Math.min(1, dispAlpha.current + dt / 160);
@@ -531,6 +644,7 @@ export default function Scanner() {
     setIdFront(null);
     setIdSide('front');
     liveQuad.current = null;
+    resetTrack.current = true;
   }
 
   const last = pages[pages.length - 1];

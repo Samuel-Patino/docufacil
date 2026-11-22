@@ -1,4 +1,12 @@
 // Detección de los bordes del documento con OpenCV.
+//
+// 1) Se buscan candidatos de varias maneras (bordes fuertes, bordes suaves, bordes de
+//    color, umbral de luz y líneas rectas) porque cada foto es distinta.
+// 2) Cada candidato se califica lado por lado: en un documento real, a lo largo de
+//    cada borde hay un cambio claro y parejo entre "adentro" (el papel, uniforme)
+//    y "afuera" (la mesa). Un cuadro que mezcla teclado, libro y mesa no lo cumple.
+// 3) Se prefieren superficies que parecen papel (claras, con poco color y texto fino)
+//    sobre objetos grandes como un portátil, sin depender tanto del tamaño.
 import type { Pt, Quad } from './scanTypes';
 
 export interface Detection {
@@ -6,6 +14,17 @@ export interface Detection {
   curve: [Pt, Pt, Pt, Pt] | null;
   area: number; // fracción del cuadro
 }
+
+export interface DetectOpts {
+  curve?: boolean;
+  minArea?: number;
+  /** Cámara en vivo: más exigente (la hoja debe verse completa) */
+  strict?: boolean;
+  /** Solo para pruebas: recibe cada candidato con su calificación */
+  debug?: (info: any) => void;
+}
+
+type ImageLike = HTMLCanvasElement | { data: Uint8ClampedArray | Uint8Array; width: number; height: number };
 
 export function orderQuad(pts: Pt[]): Quad {
   const s = pts.map((p) => p.x + p.y);
@@ -17,7 +36,7 @@ export function orderQuad(pts: Pt[]): Quad {
   return [tl, tr, br, bl];
 }
 
-function polyArea(q: Pt[]) {
+export function polyArea(q: Pt[]) {
   let a = 0;
   for (let i = 0; i < q.length; i++) {
     const p = q[i];
@@ -27,7 +46,7 @@ function polyArea(q: Pt[]) {
   return Math.abs(a) / 2;
 }
 
-function isConvex(q: Pt[]) {
+export function isConvex(q: Pt[]) {
   let sign = 0;
   for (let i = 0; i < 4; i++) {
     const a = q[i], b = q[(i + 1) % 4], c = q[(i + 2) % 4];
@@ -73,107 +92,67 @@ function edgeMids(quad: Quad, contour: Pt[]): [Pt, Pt, Pt, Pt] {
   return mids as [Pt, Pt, Pt, Pt];
 }
 
-/**
- * Busca el contorno de documento más grande en un canvas pequeño (≈ 400 px).
- * Devuelve las esquinas normalizadas 0..1.
- */
-// Motivo de descarte (útil para depurar)
-const rej = (_reason: string, _q: Pt[]) => 0;
+const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 
-export function detectDocument(cv: any, canvas: HTMLCanvasElement, opts: { curve?: boolean; minArea?: number; strict?: boolean } = {}): Detection | null {
-  const W = canvas.width, H = canvas.height;
+interface Cand {
+  q: Quad; // ordenado, en píxeles
+  contour: Pt[] | null;
+}
+
+/** Busca el documento en una imagen pequeña (≈ 320-640 px). Devuelve esquinas normalizadas 0..1. */
+export function detectDocument(cv: any, input: ImageLike, opts: DetectOpts = {}): Detection | null {
+  const W = input.width, H = input.height;
   const frameArea = W * H;
-  const minArea = (opts.minArea ?? 0.12) * frameArea;
+  const minArea = (opts.minArea ?? 0.1) * frameArea;
+  const strict = !!opts.strict;
   const mats: any[] = [];
   const keep = <T,>(m: T) => (mats.push(m), m);
   try {
-    const src = keep(cv.imread(canvas));
+    const src = keep(
+      typeof HTMLCanvasElement !== 'undefined' && input instanceof HTMLCanvasElement ? cv.imread(input) : cv.matFromArray(H, W, cv.CV_8UC4, (input as any).data),
+    );
+    // Color suavizado: se usa para calificar los bordes y medir si parece papel
+    const colBlur = keep(new cv.Mat());
+    cv.GaussianBlur(src, colBlur, new cv.Size(5, 5), 0);
+    const col: Uint8Array = colBlur.data;
+
+    const grayRaw = keep(new cv.Mat());
+    cv.cvtColor(src, grayRaw, cv.COLOR_RGBA2GRAY);
+    // Cierre morfológico: borra el texto para que el papel se vea uniforme
     const gray = keep(new cv.Mat());
-    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
     const k = Math.max(5, Math.round(Math.min(W, H) / 45) | 1);
     const kernel = keep(cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(k, k)));
-    // Cierre morfológico: borra el texto para que el papel se vea uniforme
-    cv.morphologyEx(gray, gray, cv.MORPH_CLOSE, kernel);
+    cv.morphologyEx(grayRaw, gray, cv.MORPH_CLOSE, kernel);
     cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
+    const k3 = keep(cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3)));
 
-    let best: { quad: Pt[]; area: number; contour: Pt[]; score: number } | null = null;
-    let edgeMap: any = null;
-    let edgeMap2: any = null;
-    const frameCands: Pt[][] = [];
-    const strict = !!opts.strict;
+    const T0 = performance.now();
+    const mark = (name: string) => opts.debug?.({ t: name, ms: Math.round(performance.now() - T0) });
+    const cands: Cand[] = [];
+    const frameCands: Quad[] = []; // contornos que se salen del cuadro por un lado
+    const mb = Math.max(1.5, Math.min(W, H) * 0.012);
+    const onBorder = (p: Pt) => p.x < mb || p.y < mb || p.x > W - 1 - mb || p.y > H - 1 - mb;
 
-    /**
-     * Evalúa si un cuadrilátero parece de verdad una hoja: ángulos razonables,
-     * lados opuestos parecidos, bordes visibles a lo largo de los 4 lados y
-     * diferencia de luz entre el papel y lo que lo rodea. Devuelve 0 si no sirve.
-     */
-    const judge = (q: Pt[], qa: number): number => {
-      const L = (i: number) => Math.hypot(q[(i + 1) % 4].x - q[i].x, q[(i + 1) % 4].y - q[i].y);
-      for (let i = 0; i < 4; i++) {
-        const a = q[(i + 3) % 4], b = q[i], c = q[(i + 1) % 4];
-        const v1x = a.x - b.x, v1y = a.y - b.y, v2x = c.x - b.x, v2y = c.y - b.y;
-        const cos = (v1x * v2x + v1y * v2y) / ((Math.hypot(v1x, v1y) * Math.hypot(v2x, v2y)) || 1);
-        const ang = (Math.acos(Math.max(-1, Math.min(1, cos))) * 180) / Math.PI;
-        if (ang < 38 || ang > 142) return rej("angle", q);
+    const addQuad = (pts: Pt[], contour: Pt[] | null) => {
+      const q = orderQuad(pts);
+      if (!isConvex(q)) return;
+      if (polyArea(q) < minArea) return;
+      const touching = q.filter(onBorder).length;
+      if (touching) {
+        if (touching === 2) frameCands.push(q);
+        if (strict) return;
       }
-      const r1 = Math.min(L(0), L(2)) / (Math.max(L(0), L(2)) || 1);
-      const r2 = Math.min(L(1), L(3)) / (Math.max(L(1), L(3)) || 1);
-      if (r1 < 0.33 || r2 < 0.33) return rej("sides", q);
-      if (Math.min(L(0), L(1)) / (Math.max(L(0), L(1)) || 1) < 0.12) return rej("aspect", q);
-      if (!strict) return qa;
-      // En vivo: se descarta lo que se sale del cuadro por dos o más esquinas (p. ej. el piso)
-      const m = Math.max(1.5, Math.min(W, H) * 0.005);
-      if (q.filter((p) => p.x < m || p.y < m || p.x > W - 1 - m || p.y > H - 1 - m).length >= 2) {
-        frameCands.push(q);
-        return rej("frame", q);
-      }
-      // Bordes reales a lo largo de los lados
-      let hits = 0, total = 0;
-      if (edgeMap) {
-        for (let i = 0; i < 4; i++) {
-          const a = q[i], b = q[(i + 1) % 4];
-          for (let t = 0.1; t <= 0.9; t += 0.04) {
-            const x = Math.round(a.x + (b.x - a.x) * t), y = Math.round(a.y + (b.y - a.y) * t);
-            let on = false;
-            for (let dy = -2; dy <= 2 && !on; dy++)
-              for (let dx = -2; dx <= 2 && !on; dx++) {
-                const xx = x + dx, yy = y + dy;
-                if (xx >= 0 && yy >= 0 && xx < W && yy < H && (edgeMap.ucharPtr(yy, xx)[0] || (edgeMap2 && edgeMap2.ucharPtr(yy, xx)[0]))) on = true;
-              }
-            total++;
-            if (on) hits++;
-          }
-        }
-      }
-      const support = total ? hits / total : 0;
-      if (support < 0.35) return rej("support " + support.toFixed(2), q);
-      // Contraste papel / alrededor
-      const inside = cv.Mat.zeros(H, W, cv.CV_8U);
-      const ring = new cv.Mat();
-      const poly = cv.matFromArray(4, 1, cv.CV_32SC2, q.flatMap((p) => [Math.round(p.x), Math.round(p.y)]));
-      const pv = new cv.MatVector();
-      pv.push_back(poly);
-      cv.fillPoly(inside, pv, new cv.Scalar(255));
-      const rk = Math.max(5, Math.round(Math.min(W, H) * 0.05) | 1);
-      const kr = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(rk, rk));
-      cv.dilate(inside, ring, kr);
-      cv.subtract(ring, inside, ring);
-      const mIn = cv.mean(gray, inside)[0];
-      const mOut = cv.mean(gray, ring)[0];
-      [inside, ring, poly, pv, kr].forEach((x) => x.delete());
-      const contrast = Math.abs(mIn - mOut);
-      if (contrast < 5 && support < 0.6) return rej("contrast " + contrast.toFixed(1) + " sup " + support.toFixed(2), q);
-      return qa * support * Math.min(1.5, 0.6 + contrast / 40);
+      cands.push({ q, contour });
     };
 
-    const tryEdges = (edges: any) => {
+    const fromEdges = (edges: any) => {
       const contours = keep(new cv.MatVector());
       const hier = keep(new cv.Mat());
       cv.findContours(edges, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
       for (let i = 0; i < contours.size(); i++) {
         const c = contours.get(i);
         const area = cv.contourArea(c);
-        if (area < minArea) {
+        if (area < minArea * 0.6) {
           c.delete();
           continue;
         }
@@ -188,41 +167,27 @@ export function detectDocument(cv: any, canvas: HTMLCanvasElement, opts: { curve
           approx.delete();
           if (quad) break;
         }
-        if (!quad && area > frameArea * 0.2) {
+        if (!quad) {
           const r = cv.minAreaRect(hull);
-          const pts = cv.RotatedRect.points(r);
-          quad = pts.map((p: any) => ({ x: p.x, y: p.y }));
+          quad = cv.RotatedRect.points(r).map((p: any) => ({ x: p.x, y: p.y }));
         }
-        if (quad && isConvex(orderQuad(quad))) {
-          const oq = orderQuad(quad);
-          const qa = polyArea(oq);
-          const score = qa >= minArea ? judge(oq, qa) : 0;
-          if (score > 0 && (!best || score > best.score)) best = { quad, area: qa, contour: matToPts(c), score };
-        }
+        if (quad) addQuad(quad, matToPts(c));
         hull.delete();
         c.delete();
       }
     };
 
-    // 1) Bordes (Canny)
-    const edges = keep(new cv.Mat());
-    cv.Canny(gray, edges, 30, 110);
-    const k3 = keep(cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3)));
-    cv.dilate(edges, edges, k3, new cv.Point(-1, -1), 2);
-    edgeMap = edges;
-    tryEdges(edges);
-
-    // 1b) Bordes suaves (papel claro sobre fondo claro, objetos con poco contraste)
-    if (!best) {
-      const soft = keep(new cv.Mat());
-      cv.Canny(gray, soft, 12, 45);
-      cv.dilate(soft, soft, k3, new cv.Point(-1, -1), 2);
-      edgeMap2 = soft;
-      tryEdges(soft);
-    }
-
-    // 1c) Bordes por color: objetos de distinto color pero igual brillo que el fondo
-    if (!best) {
+    // 1) Bordes fuertes y suaves
+    const strong = keep(new cv.Mat());
+    cv.Canny(gray, strong, 30, 110);
+    cv.dilate(strong, strong, k3, new cv.Point(-1, -1), 2);
+    fromEdges(strong);
+    const soft = keep(new cv.Mat());
+    cv.Canny(gray, soft, 12, 45);
+    cv.dilate(soft, soft, k3, new cv.Point(-1, -1), 2);
+    fromEdges(soft);
+    // 2) Bordes de color (objetos de distinto color pero igual brillo que el fondo)
+    {
       const ch = keep(new cv.MatVector());
       cv.split(src, ch);
       const colorEdges = keep(cv.Mat.zeros(H, W, cv.CV_8U));
@@ -236,70 +201,313 @@ export function detectDocument(cv: any, canvas: HTMLCanvasElement, opts: { curve
         c.delete();
       }
       cv.dilate(colorEdges, colorEdges, k3, new cv.Point(-1, -1), 2);
-      edgeMap2 = colorEdges;
-      tryEdges(colorEdges);
+      fromEdges(colorEdges);
     }
-
-    // 2) Papel claro sobre fondo oscuro (umbral de Otsu)
-    if (!best) {
+    mark('contornos');
+    // 3) Papel claro sobre fondo oscuro (umbral de Otsu)
+    {
       const th = keep(new cv.Mat());
       cv.threshold(gray, th, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
-      tryEdges(th);
+      fromEdges(th);
     }
 
-    // 3) En vivo: búsqueda por líneas rectas. Sirve para libros abiertos, donde el
-    //    borde del lomo es una sombra suave y el contorno se junta con la otra página.
-    if (!best && strict) {
-      const g2 = keep(new cv.Mat());
-      cv.cvtColor(src, g2, cv.COLOR_RGBA2GRAY);
-      cv.GaussianBlur(g2, g2, new cv.Size(3, 3), 0);
-      const e2 = keep(new cv.Mat());
-      cv.Canny(g2, e2, 20, 60);
-      edgeMap2 = e2;
-      const hl = keep(new cv.Mat());
-      cv.HoughLinesP(e2, hl, 1, Math.PI / 180, 30, Math.min(W, H) * 0.25, 10);
-      type Ln = { a: Pt; b: Pt; len: number };
-      const V: Ln[] = [];
-      const Hz: Ln[] = [];
-      const addLine = (a: Pt, b: Pt) => {
-        const ang = Math.abs((Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI);
-        const len = Math.hypot(b.x - a.x, b.y - a.y);
-        if (len < Math.min(W, H) * 0.2) return;
-        if (ang < 35 || ang > 145) Hz.push({ a, b, len });
-        else if (ang > 55 && ang < 125) V.push({ a, b, len });
-      };
-      for (let i = 0; i < hl.rows; i++) {
-        const d = hl.data32S;
-        addLine({ x: d[i * 4], y: d[i * 4 + 1] }, { x: d[i * 4 + 2], y: d[i * 4 + 3] });
-      }
-      // Lados útiles de los contornos que se salían del cuadro (se descarta el lado pegado al borde)
-      const mb = Math.min(W, H) * 0.02;
-      const onBorder = (p: Pt) => p.x < mb || p.y < mb || p.x > W - mb || p.y > H - mb;
-      for (const q of frameCands)
-        for (let i = 0; i < 4; i++) {
-          const a = q[i], b = q[(i + 1) % 4];
-          if (onBorder(a) && onBorder(b) && (Math.abs(a.x - b.x) < mb * 2 || Math.abs(a.y - b.y) < mb * 2)) continue;
-          addLine(a, b);
+    mark('otsu');
+    // ----- calificación -----
+    const at = (x: number, y: number) => {
+      const xi = Math.max(0, Math.min(W - 1, Math.round(x))), yi = Math.max(0, Math.min(H - 1, Math.round(y)));
+      return (yi * W + xi) * 4;
+    };
+    const lumAt = (i: number) => 0.299 * col[i] + 0.587 * col[i + 1] + 0.114 * col[i + 2];
+    const dOff = Math.max(2, Math.round(Math.min(W, H) * 0.012));
+
+    /** Qué tan claro y parejo es el cambio adentro/afuera a lo largo de un lado (0..1). */
+    const sideScore = (a: Pt, b: Pt, cx: number, cy: number, fine = true) => {
+      const lx = b.x - a.x, ly = b.y - a.y, len = Math.hypot(lx, ly) || 1;
+      let nx = -ly / len, ny = lx / len;
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      if ((mx - cx) * nx + (my - cy) * ny < 0) {
+        nx = -nx;
+        ny = -ny;
+      } // normal hacia afuera
+      const steps = fine ? Math.max(14, Math.min(40, Math.round(len / 4))) : 12;
+      const ins: number[] = [];
+      const diffs: number[] = [];
+      for (let s = 1; s < steps; s++) {
+        const t = 0.06 + (0.88 * s) / steps;
+        const px = a.x + lx * t, py = a.y + ly * t;
+        const xi = px - nx * dOff, yi = py - ny * dOff, xo = px + nx * dOff, yo = py + ny * dOff;
+        if (xo < 0 || yo < 0 || xo > W - 1 || yo > H - 1) {
+          ins.push(NaN);
+          diffs.push(0);
+          continue;
         }
-      // Lado pegado al borde del cuadro: se desliza hacia adentro buscando el borde más marcado (p. ej. el lomo)
+        const i = at(xi, yi), o = at(xo, yo);
+        const dr = col[i] - col[o], dg = col[i + 1] - col[o + 1], db = col[i + 2] - col[o + 2];
+        diffs.push(Math.sqrt(dr * dr + dg * dg + db * db));
+        ins.push(lumAt(i));
+      }
+      const valid = ins.filter((v) => !isNaN(v)).sort((p, q) => p - q);
+      const med = valid[Math.floor(valid.length / 2)] ?? 0;
+      let ok = 0;
+      for (let j = 0; j < diffs.length; j++) if (diffs[j] > 22 && Math.abs(ins[j] - med) < 32) ok++;
+      return ok / diffs.length;
+    };
+
+    /** Qué tanto parece papel: claro, poco color y poca superficie oscura (0.35..1). */
+    const paperness = (q: Quad) => {
+      const lums: number[] = [];
+      let sat = 0;
+      const n = 14;
+      for (let u = 1; u < n; u++)
+        for (let v = 1; v < n; v++) {
+          const s = u / n, t = v / n;
+          const x = (1 - t) * ((1 - s) * q[0].x + s * q[1].x) + t * ((1 - s) * q[3].x + s * q[2].x);
+          const y = (1 - t) * ((1 - s) * q[0].y + s * q[1].y) + t * ((1 - s) * q[3].y + s * q[2].y);
+          const i = at(x, y);
+          const mx = Math.max(col[i], col[i + 1], col[i + 2]), mn = Math.min(col[i], col[i + 1], col[i + 2]);
+          sat += mx ? (mx - mn) / mx : 0;
+          lums.push(lumAt(i));
+        }
+      lums.sort((p, q) => p - q);
+      const p85 = lums[Math.floor(lums.length * 0.85)];
+      const dark = lums.filter((l) => l < p85 * 0.6).length / lums.length;
+      sat /= lums.length;
+      const bright = clamp01((p85 - 70) / 130);
+      const clean = clamp01(1 - dark / 0.35);
+      const plain = 1 - 0.6 * clamp01(sat / 0.5);
+      return 0.35 + 0.65 * bright * clean * plain;
+    };
+
+    const shapeOK = (q: Quad) => {
+      const L = (i: number) => Math.hypot(q[(i + 1) % 4].x - q[i].x, q[(i + 1) % 4].y - q[i].y);
+      let cosSum = 0;
+      for (let i = 0; i < 4; i++) {
+        const a = q[(i + 3) % 4], b = q[i], c = q[(i + 1) % 4];
+        const v1x = a.x - b.x, v1y = a.y - b.y, v2x = c.x - b.x, v2y = c.y - b.y;
+        const cos = (v1x * v2x + v1y * v2y) / (Math.hypot(v1x, v1y) * Math.hypot(v2x, v2y) || 1);
+        if (Math.abs(cos) > 0.77) return 0; // ángulos entre ~40° y ~140°
+        cosSum += Math.abs(cos);
+      }
+      const r1 = Math.min(L(0), L(2)) / (Math.max(L(0), L(2)) || 1);
+      const r2 = Math.min(L(1), L(3)) / (Math.max(L(1), L(3)) || 1);
+      if (r1 < 0.4 || r2 < 0.4) return 0;
+      if (Math.min(L(0), L(1)) / (Math.max(L(0), L(1)) || 1) < 0.12) return 0;
+      return 1 - 0.6 * (cosSum / 4);
+    };
+
+    // 4) Líneas rectas: en escenas con muchas cosas el contorno de la hoja se junta con
+    //    otros objetos, pero sus 4 bordes siguen siendo líneas. Se combinan de a pares.
+    {
+      const thin = keep(new cv.Mat());
+      cv.Canny(gray, thin, 15, 50);
+      const ch = keep(new cv.MatVector());
+      cv.split(colBlur, ch);
+      const one = keep(new cv.Mat());
+      for (let i = 0; i < 3; i++) {
+        const c = ch.get(i);
+        cv.morphologyEx(c, c, cv.MORPH_CLOSE, kernel);
+        cv.Canny(c, one, 25, 80);
+        cv.bitwise_or(thin, one, thin);
+        c.delete();
+      }
+      const hl = keep(new cv.Mat());
+      const minLen = Math.min(W, H) * 0.12;
+      cv.HoughLinesP(thin, hl, 1, Math.PI / 180, 22, minLen, 8);
+      type Seg = { a: Pt; b: Pt; ang: number; len: number };
+      const segs: Seg[] = [];
+      // Esta versión de OpenCV devuelve las líneas como columnas: se lee todo el arreglo
+      const nLines = Math.floor(hl.data32S.length / 4);
+      for (let i = 0; i < nLines; i++) {
+        const d = hl.data32S;
+        const a = { x: d[i * 4], y: d[i * 4 + 1] }, b = { x: d[i * 4 + 2], y: d[i * 4 + 3] };
+        let ang = (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI;
+        if (ang < 0) ang += 180;
+        segs.push({ a, b, ang, len: Math.hypot(b.x - a.x, b.y - a.y) });
+      }
+      // Une segmentos de la misma recta (bordes cortados por sombras o reflejos)
+      segs.sort((p, q) => q.len - p.len);
+      const lines: Seg[] = [];
+      const angDiff = (x: number, y: number) => Math.min(Math.abs(x - y), 180 - Math.abs(x - y));
+      const distToLine = (p: Pt, s: Seg) => {
+        const lx = s.b.x - s.a.x, ly = s.b.y - s.a.y, l = Math.hypot(lx, ly) || 1;
+        return Math.abs((p.x - s.a.x) * ly - (p.y - s.a.y) * lx) / l;
+      };
+      for (const s of segs) {
+        const m = lines.find((l) => angDiff(l.ang, s.ang) < 5 && distToLine(s.a, l) < 4 && distToLine(s.b, l) < 4);
+        if (!m) {
+          lines.push({ ...s });
+          continue;
+        }
+        const ux = (m.b.x - m.a.x) / (m.len || 1), uy = (m.b.y - m.a.y) / (m.len || 1);
+        const proj = (p: Pt) => (p.x - m.a.x) * ux + (p.y - m.a.y) * uy;
+        const ts = [0, m.len, proj(s.a), proj(s.b)];
+        const t0 = Math.min(...ts), t1 = Math.max(...ts);
+        const a = { x: m.a.x + ux * t0, y: m.a.y + uy * t0 }, b = { x: m.a.x + ux * t1, y: m.a.y + uy * t1 };
+        m.a = a;
+        m.b = b;
+        m.len = t1 - t0;
+      }
+      opts.debug?.({ lines: lines.map((l) => [Math.round(l.a.x), Math.round(l.a.y), Math.round(l.b.x), Math.round(l.b.y)]) });
+      const horiz = lines.filter((l) => l.ang < 45 || l.ang > 135).sort((p, q) => q.len - p.len).slice(0, 32);
+      const vert = lines.filter((l) => l.ang >= 45 && l.ang <= 135).sort((p, q) => q.len - p.len).slice(0, 32);
+      opts.debug?.({ horiz: horiz.map((l) => [l.a, l.b].map((p) => [Math.round(p.x), Math.round(p.y)])), vert: vert.map((l) => [l.a, l.b].map((p) => [Math.round(p.x), Math.round(p.y)])) });
+      const inter = (l1: Seg, l2: Seg): Pt | null => {
+        const x1 = l1.a.x, y1 = l1.a.y, x2 = l1.b.x, y2 = l1.b.y, x3 = l2.a.x, y3 = l2.a.y, x4 = l2.b.x, y4 = l2.b.y;
+        const den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+        if (Math.abs(den) < 1e-6) return null;
+        return {
+          x: ((x1 * y2 - y1 * x2) * (x3 - x4) - (x1 - x2) * (x3 * y4 - y3 * x4)) / den,
+          y: ((x1 * y2 - y1 * x2) * (y3 - y4) - (y1 - y2) * (x3 * y4 - y3 * x4)) / den,
+        };
+      };
+      // Qué parte del lado P→Q cubre la línea detectada
+      const cover = (l: Seg, P: Pt, Q: Pt) => {
+        const lx = Q.x - P.x, ly = Q.y - P.y, ll = Math.hypot(lx, ly) || 1;
+        const t = (p: Pt) => ((p.x - P.x) * lx + (p.y - P.y) * ly) / (ll * ll);
+        const a = Math.max(0, Math.min(t(l.a), t(l.b))), b = Math.min(1, Math.max(t(l.a), t(l.b)));
+        return Math.max(0, b - a);
+      };
+      const midY = (l: Seg) => (l.a.y + l.b.y) / 2, midX = (l: Seg) => (l.a.x + l.b.x) / 2;
+      // Esquinas posibles: el cruce debe quedar cerca de los dos segmentos que lo forman
+      const along = (l: Seg, p: Pt) => ((p.x - l.a.x) * (l.b.x - l.a.x) + (p.y - l.a.y) * (l.b.y - l.a.y)) / (l.len * l.len || 1);
+      const corner: (Pt | null)[][] = horiz.map((h) =>
+        vert.map((v) => {
+          const p = inter(h, v);
+          if (!p || p.x < -2 || p.y < -2 || p.x > W + 1 || p.y > H + 1) return null;
+          const th = along(h, p), tv = along(v, p);
+          return th > -0.35 && th < 1.35 && tv > -0.35 && tv < 1.35 ? p : null;
+        }),
+      );
+      const lineQuads: { pts: Pt[]; pre: number }[] = [];
+      for (let i = 0; i < horiz.length; i++) {
+        const top = horiz[i];
+        for (let u = 0; u < vert.length; u++) {
+          const tl = corner[i][u];
+          if (!tl) continue;
+          const left = vert[u];
+          for (let v = 0; v < vert.length; v++) {
+            const tr = corner[i][v];
+            if (!tr || v === u) continue;
+            const right = vert[v];
+            if (midX(right) - midX(left) < W * 0.12) continue;
+            for (let j = 0; j < horiz.length; j++) {
+              if (j === i) continue;
+              const bl = corner[j][u], br = corner[j][v];
+              if (!bl || !br) continue;
+              const bot = horiz[j];
+              if (midY(bot) - midY(top) < H * 0.12) continue;
+              const c1 = cover(top, tl, tr), c2 = cover(bot, bl, br), c3 = cover(left, tl, bl), c4 = cover(right, tr, br);
+              const mc = Math.min(c1, c2, c3, c4);
+              if (mc < 0.35) continue;
+              lineQuads.push({ pts: [tl, tr, br, bl], pre: (c1 + c2 + c3 + c4) * (0.5 + mc) });
+              if (lineQuads.length > 3000) break;
+            }
+          }
+        }
+      }
+      // Sólo se califican en detalle los más prometedores
+      // Revisión rápida de los bordes (pocas muestras) para elegir cuáles calificar en detalle
+      for (const lq of lineQuads) {
+        const q = orderQuad(lq.pts);
+        const cx = (q[0].x + q[1].x + q[2].x + q[3].x) / 4, cy = (q[0].y + q[1].y + q[2].y + q[3].y) / 4;
+        const s = [0, 1, 2, 3].map((i) => sideScore(q[i], q[(i + 1) % 4], cx, cy, false));
+        lq.pre = (s[0] + s[1] + s[2] + s[3]) * (0.3 + Math.min(...s));
+      }
+      lineQuads.sort((p, q) => q.pre - p.pre);
+      for (const lq of lineQuads.slice(0, 80)) if (lq.pre > 0.6) addQuad(lq.pts, null);
+    }
+
+    mark('lineas');
+    /** Diferencia de color entre el interior y una franja justo por fuera (0..~440). */
+    const regionContrast = (q: Quad, cx: number, cy: number) => {
+      let ir = 0, ig = 0, ib = 0, ni = 0, or = 0, og = 0, ob = 0, no = 0;
+      const n = 10;
+      for (let u = 1; u < n; u++)
+        for (let v = 1; v < n; v++) {
+          const s = u / n, t = v / n;
+          const x = (1 - t) * ((1 - s) * q[0].x + s * q[1].x) + t * ((1 - s) * q[3].x + s * q[2].x);
+          const y = (1 - t) * ((1 - s) * q[0].y + s * q[1].y) + t * ((1 - s) * q[3].y + s * q[2].y);
+          const i = at(x, y);
+          ir += col[i];
+          ig += col[i + 1];
+          ib += col[i + 2];
+          ni++;
+        }
+      const off = dOff * 3;
+      for (let k = 0; k < 4; k++) {
+        const a = q[k], b = q[(k + 1) % 4];
+        const lx = b.x - a.x, ly = b.y - a.y, len = Math.hypot(lx, ly) || 1;
+        let nx = -ly / len, ny = lx / len;
+        if (((a.x + b.x) / 2 - cx) * nx + ((a.y + b.y) / 2 - cy) * ny < 0) {
+          nx = -nx;
+          ny = -ny;
+        }
+        for (let t = 0.1; t <= 0.9; t += 0.1) {
+          const x = a.x + lx * t + nx * off, y = a.y + ly * t + ny * off;
+          if (x < 0 || y < 0 || x > W - 1 || y > H - 1) continue;
+          const i = at(x, y);
+          or += col[i];
+          og += col[i + 1];
+          ob += col[i + 2];
+          no++;
+        }
+      }
+      if (!ni || !no) return 0;
+      return Math.hypot(ir / ni - or / no, ig / ni - og / no, ib / ni - ob / no);
+    };
+
+    const ranked: { c: Cand; score: number }[] = [];
+    /** Calificación de un cuadrilátero (0 = no sirve). */
+    const scoreOf = (q: Quad, log = false): number => {
+      const shape = shapeOK(q);
+      if (!shape) {
+        if (log) opts.debug?.({ q, why: 'shape' });
+        return 0;
+      }
+      const cx = (q[0].x + q[1].x + q[2].x + q[3].x) / 4, cy = (q[0].y + q[1].y + q[2].y + q[3].y) / 4;
+      const sides = [0, 1, 2, 3].map((i) => sideScore(q[i], q[(i + 1) % 4], cx, cy));
+      const sorted = [...sides].sort((a, b) => b - a);
+      const mean = sides.reduce((a, b) => a + b, 0) / 4;
+      // Tres lados claros y el cuarto al menos visible (p. ej. el lomo de un libro)
+      if (strict ? sorted[2] < 0.5 || sorted[3] < 0.22 || mean < 0.55 : mean < 0.4) return 0;
+      // El objeto debe verse distinto de lo que lo rodea (color promedio adentro vs. afuera)
+      if (strict && regionContrast(q, cx, cy) < 22) return 0;
+      const areaF = polyArea(q) / frameArea;
+      const paper = paperness(q);
+      const score = mean * mean * (0.6 + 0.4 * clamp01(sorted[3] / 0.6)) * Math.sqrt(areaF) * paper * paper * shape;
+      if (log) opts.debug?.({ q, final: +score.toFixed(4), sides: sides.map((s) => +s.toFixed(2)), paper: +paper.toFixed(2), shape: +shape.toFixed(2), areaF: +areaF.toFixed(3) });
+      return score;
+    };
+    const evaluate = (c: Cand) => {
+      const s = scoreOf(c.q, true);
+      if (s > 0) ranked.push({ c, score: s });
+    };
+    cands.forEach(evaluate);
+    mark('evaluar ' + cands.length);
+
+    // 4) Lado pegado al borde del cuadro (libro abierto: la otra página se junta con esta).
+    //    Se desliza ese lado hacia adentro hasta el borde más marcado (el lomo).
+    if (frameCands.length) {
       const gx = keep(new cv.Mat()), gy = keep(new cv.Mat()), mag = keep(new cv.Mat());
-      cv.Sobel(g2, gx, cv.CV_16S, 1, 0);
-      cv.Sobel(g2, gy, cv.CV_16S, 0, 1);
+      cv.Sobel(grayRaw, gx, cv.CV_16S, 1, 0);
+      cv.Sobel(grayRaw, gy, cv.CV_16S, 0, 1);
       cv.convertScaleAbs(gx, gx);
       cv.convertScaleAbs(gy, gy);
       cv.addWeighted(gx, 0.5, gy, 0.5, 0, mag);
       const md: Uint8Array = mag.data;
-      // Puntaje: borde fuerte sobre la línea y poca textura justo hacia adentro (el margen
-      // blanco de la hoja). Así no se confunde con una columna de texto.
+      const lerp = (a: Pt, b: Pt, t: number): Pt => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
       const lineScore = (P: Pt, Q: Pt, C: Pt) => {
         const lx = Q.x - P.x, ly = Q.y - P.y, ll = Math.hypot(lx, ly) || 1;
         let nx = -ly / ll, ny = lx / ll;
         const mx = (P.x + Q.x) / 2, my = (P.y + Q.y) / 2;
-        if ((C.x - mx) * nx + (C.y - my) * ny < 0) { nx = -nx; ny = -ny; }
+        if ((C.x - mx) * nx + (C.y - my) * ny < 0) {
+          nx = -nx;
+          ny = -ny;
+        }
         const off = Math.max(3, Math.min(W, H) * 0.015);
         let s = 0, inner = 0, n = 0;
-        for (let k = 0.1; k <= 0.9; k += 0.025) {
-          const x = Math.round(P.x + lx * k), y = Math.round(P.y + ly * k);
+        for (let t = 0.1; t <= 0.9; t += 0.025) {
+          const x = Math.round(P.x + lx * t), y = Math.round(P.y + ly * t);
           const ix = Math.round(x + nx * off), iy = Math.round(y + ny * off);
           if (x < 1 || y < 1 || x >= W - 1 || y >= H - 1 || ix < 0 || iy < 0 || ix >= W || iy >= H) continue;
           let m = 0;
@@ -310,84 +518,89 @@ export function detectDocument(cv: any, canvas: HTMLCanvasElement, opts: { curve
         }
         return n > 10 ? (s - inner * 0.8) / n : 0;
       };
-      const lerp = (a: Pt, b: Pt, t: number): Pt => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
       for (const q of frameCands) {
-        const borderSides = [0, 1, 2, 3].filter((i) => onBorder(q[i]) && onBorder(q[(i + 1) % 4]));
-        if (borderSides.length !== 1) continue;
-        const i = borderSides[0];
-        const A0 = q[(i + 3) % 4], A1 = q[i]; // lado vecino que termina en q[i]
-        const B0 = q[(i + 2) % 4], B1 = q[(i + 1) % 4]; // lado vecino que termina en q[i+1]
+        const bs = [0, 1, 2, 3].filter((i) => onBorder(q[i]) && onBorder(q[(i + 1) % 4]));
+        if (bs.length !== 1) continue;
+        const i = bs[0];
+        const A0 = q[(i + 3) % 4], A1 = q[i];
+        const B0 = q[(i + 2) % 4], B1 = q[(i + 1) % 4];
         const C = { x: (q[0].x + q[1].x + q[2].x + q[3].x) / 4, y: (q[0].y + q[1].y + q[2].y + q[3].y) / 4 };
         let bestL: { P: Pt; Q: Pt; s: number } | null = null;
         const scores: number[] = [];
-        for (let s = 0.5; s <= 1.0001; s += 0.02)
-          for (let t = 0.5; t <= 1.0001; t += 0.02) {
+        for (let s = 0.5; s <= 1.0001; s += 0.025)
+          for (let t = 0.5; t <= 1.0001; t += 0.025) {
             const P = lerp(A0, A1, s), Q = lerp(B0, B1, t);
             if (onBorder(P) && onBorder(Q)) continue;
             const sc = lineScore(P, Q, C);
             scores.push(sc);
             if (!bestL || sc > bestL.s) bestL = { P, Q, s: sc };
           }
-        if (!bestL || !scores.length) continue;
+        if (!bestL) continue;
         const med = [...scores].sort((a, b) => a - b)[Math.floor(scores.length / 2)];
         if (bestL.s < 10 || bestL.s < med * 1.5 + 4) continue;
         const nq = [...q];
         nq[i] = bestL.P;
         nq[(i + 1) % 4] = bestL.Q;
         const oq = orderQuad(nq);
-        if (!isConvex(oq)) continue;
-        const qa = polyArea(oq);
-        if (qa < minArea) continue;
-        const score = judge(oq, qa);
-        if (score > 0 && (!best || score > best.score)) best = { quad: oq, area: qa, contour: oq, score };
+        if (isConvex(oq) && polyArea(oq) >= minArea && !oq.some(onBorder)) evaluate({ q: oq, contour: null });
       }
-
-      const xAt = (l: Ln, y: number) => l.a.x + ((l.b.x - l.a.x) * (y - l.a.y)) / (l.b.y - l.a.y || 1e-6);
-      const yAt = (l: Ln, x: number) => l.a.y + ((l.b.y - l.a.y) * (x - l.a.x)) / (l.b.x - l.a.x || 1e-6);
-      const top5 = (arr: Ln[]) => arr.sort((p, q) => q.len - p.len).slice(0, 5);
-      const Ls = top5(V.filter((l) => xAt(l, H / 2) < W / 2));
-      const Rs = top5(V.filter((l) => xAt(l, H / 2) >= W / 2));
-      const Ts = top5(Hz.filter((l) => yAt(l, W / 2) < H / 2));
-      const Bs = top5(Hz.filter((l) => yAt(l, W / 2) >= H / 2));
-      const inter = (l1: Ln, l2: Ln): Pt | null => {
-        const x1 = l1.a.x, y1 = l1.a.y, x2 = l1.b.x, y2 = l1.b.y, x3 = l2.a.x, y3 = l2.a.y, x4 = l2.b.x, y4 = l2.b.y;
-        const den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
-        if (Math.abs(den) < 1e-6) return null;
-        const px = ((x1 * y2 - y1 * x2) * (x3 - x4) - (x1 - x2) * (x3 * y4 - y3 * x4)) / den;
-        const py = ((x1 * y2 - y1 * x2) * (y3 - y4) - (y1 - y2) * (x3 * y4 - y3 * x4)) / den;
-        return { x: px, y: py };
-      };
-      for (const t of Ts)
-        for (const bt of Bs)
-          for (const l of Ls)
-            for (const r of Rs) {
-              const cs = [inter(t, l), inter(t, r), inter(bt, r), inter(bt, l)];
-              if (cs.some((p) => !p)) continue;
-              const oq = orderQuad(cs as Pt[]);
-              if (!isConvex(oq)) continue;
-              const qa = polyArea(oq);
-              if (qa < minArea) continue;
-              const score = judge(oq, qa);
-              if (score > 0 && (!best || score > best.score)) best = { quad: oq, area: qa, contour: oq, score };
-            }
     }
 
-    if (!best) return null;
-    const b = best as { quad: Pt[]; area: number; contour: Pt[]; score: number };
+    mark('lomo');
+    if (!ranked.length) return null;
+    // Ajuste fino: cada esquina se mueve unos píxeles hasta que sus dos lados caen justo
+    // sobre el borde real. Se hace con los 3 mejores y se queda el que mejor califique.
+    ranked.sort((p, q) => q.score - p.score);
+    const refine = (q0: Quad): Quad => {
+      const q = q0.map((p) => ({ ...p })) as Quad;
+      const step = Math.max(1, Math.round(Math.min(W, H) * 0.006));
+      for (let round = 0; round < 2; round++)
+        for (let i = 0; i < 4; i++) {
+          const cx = (q[0].x + q[1].x + q[2].x + q[3].x) / 4, cy = (q[0].y + q[1].y + q[2].y + q[3].y) / 4;
+          const prev = q[(i + 3) % 4], next = q[(i + 1) % 4];
+          let bestP = q[i];
+          let bestS = sideScore(prev, q[i], cx, cy) + sideScore(q[i], next, cx, cy);
+          const orig = q[i];
+          for (let dy = -3; dy <= 3; dy++)
+            for (let dx = -3; dx <= 3; dx++) {
+              if (!dx && !dy) continue;
+              const p = { x: orig.x + dx * step, y: orig.y + dy * step };
+              if (p.x < 0 || p.y < 0 || p.x > W - 1 || p.y > H - 1) continue;
+              const s = sideScore(prev, p, cx, cy) + sideScore(p, next, cx, cy);
+              if (s > bestS + 0.01) {
+                bestS = s;
+                bestP = p;
+              }
+            }
+          q[i] = bestP;
+        }
+      return q;
+    };
+    for (const r of ranked.slice(0, 3)) {
+      const rq = refine(r.c.q);
+      const s = scoreOf(rq);
+      if (s > r.score) {
+        r.c = { q: rq, contour: r.c.contour };
+        r.score = s;
+      }
+    }
+    ranked.sort((p, q) => q.score - p.score);
+    mark('ajuste');
+    const b = ranked[0];
     // El contorno queda un poco por fuera del papel (por la dilatación): lo encogemos levemente
-    const oq = orderQuad(b.quad);
+    const oq = b.c.q;
     const cx = oq.reduce((s, p) => s + p.x, 0) / 4, cy = oq.reduce((s, p) => s + p.y, 0) / 4;
-    const inset = Math.max(1.5, Math.min(W, H) * 0.006);
+    const inset = Math.max(1, Math.min(W, H) * 0.004);
     const q = oq.map((p) => {
       const dx = cx - p.x, dy = cy - p.y, d = Math.hypot(dx, dy) || 1;
       return { x: p.x + (dx / d) * inset * 1.41, y: p.y + (dy / d) * inset * 1.41 };
     }) as Quad;
-    const curve = opts.curve ? edgeMids(q, b.contour) : null;
+    const curve = opts.curve && b.c.contour ? edgeMids(q, b.c.contour) : null;
     const norm = (p: Pt): Pt => ({ x: Math.min(1, Math.max(0, p.x / W)), y: Math.min(1, Math.max(0, p.y / H)) });
     return {
       quad: q.map(norm) as Quad,
       curve: curve ? (curve.map(norm) as [Pt, Pt, Pt, Pt]) : null,
-      area: b.area / frameArea,
+      area: polyArea(oq) / frameArea,
     };
   } catch (e) {
     console.warn('detect', e);
@@ -404,13 +617,13 @@ export function detectDocument(cv: any, canvas: HTMLCanvasElement, opts: { curve
 /** Detecta sobre una imagen (archivo/foto) reduciéndola primero. */
 export async function detectInBlob(cv: any, blob: Blob, curve = false): Promise<Detection | null> {
   const bmp = await createImageBitmap(blob);
-  const s = Math.min(1, 640 / Math.max(bmp.width, bmp.height));
+  const s = Math.min(1, 480 / Math.max(bmp.width, bmp.height));
   const c = document.createElement('canvas');
   c.width = Math.round(bmp.width * s);
   c.height = Math.round(bmp.height * s);
   c.getContext('2d')!.drawImage(bmp, 0, 0, c.width, c.height);
   bmp.close();
-  // Primero la búsqueda estricta (la misma de la cámara); si no encuentra nada, una más permisiva
+  // Primero la búsqueda exigente (la misma de la cámara); si no encuentra nada, una más permisiva
   return detectDocument(cv, c, { curve, minArea: 0.08, strict: true }) || detectDocument(cv, c, { curve, minArea: 0.08 });
 }
 
@@ -418,6 +631,18 @@ export function quadDistance(a: Quad, b: Quad) {
   let d = 0;
   for (let i = 0; i < 4; i++) d = Math.max(d, Math.hypot(a[i].x - b[i].x, a[i].y - b[i].y));
   return d;
+}
+
+/** Aplica una homografía 3×3 (en píxeles de un cuadro W×H) a un cuadrilátero normalizado. */
+export function warpQuad(q: Quad, h: number[], W: number, H: number): Quad | null {
+  const out: Pt[] = [];
+  for (const p of q) {
+    const x = p.x * W, y = p.y * H;
+    const w = h[6] * x + h[7] * y + h[8];
+    if (Math.abs(w) < 1e-6) return null;
+    out.push({ x: (h[0] * x + h[1] * y + h[2]) / w / W, y: (h[3] * x + h[4] * y + h[5]) / w / H });
+  }
+  return out as Quad;
 }
 
 export const FULL_QUAD: Quad = [
