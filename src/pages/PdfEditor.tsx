@@ -2,8 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   Check, Pen, Highlighter, Type, StickyNote, Square, ArrowUpRight, Eraser, ImagePlus, PenLine, Undo2, Redo2,
-  Save, X, Trash2, Minus, Plus, FormInput, Paintbrush, Loader2,
+  Save, X, Trash2, Minus, Plus, FormInput, Paintbrush, Loader2, Menu, MoreVertical, Columns2, Presentation, Info, Maximize2,
+  MoveHorizontal, TextCursorInput, Trash, ChevronLeft, ChevronRight,
 } from 'lucide-react';
+import { flushSync } from 'react-dom';
+import { PageThumb } from '../components/PageGrid';
+import { pdfjs, renderPage } from '../lib/pdf';
+import { formatBytes } from '../lib/util';
 import { getDoc, getDocBlob, updateDocBlob, addDoc } from '../lib/library';
 import type { DocMeta } from '../lib/db';
 import { openWithPassword } from '../lib/pdfAccess';
@@ -16,12 +21,13 @@ import { pickFiles } from '../lib/share';
 import { uid, blobToDataURL, bytesToBlob, baseName } from '../lib/util';
 import { isFromDevice, saveBackToDevice } from '../lib/device';
 
-type Tool = 'pen' | 'marker' | 'highlight' | 'text' | 'note' | 'rect' | 'arrow' | 'whiteout' | 'eraser';
+type Tool = 'edittext' | 'pen' | 'marker' | 'highlight' | 'text' | 'note' | 'rect' | 'arrow' | 'whiteout' | 'eraser';
 
 const COLORS = ['#0f172a', '#dc2626', '#2563eb', '#16a34a', '#9333ea', '#ea580c', '#ffffff'];
 const HL = ['#fde047', '#86efac', '#93c5fd', '#f9a8d4', '#fdba74'];
 
 const TOOLS: { id: Tool; label: string; icon: any }[] = [
+  { id: 'edittext', label: 'Editar texto', icon: TextCursorInput },
   { id: 'pen', label: 'Lápiz', icon: Pen },
   { id: 'marker', label: 'Marcador', icon: Paintbrush },
   { id: 'highlight', label: 'Resaltar', icon: Highlighter },
@@ -29,8 +35,8 @@ const TOOLS: { id: Tool; label: string; icon: any }[] = [
   { id: 'note', label: 'Comentario', icon: StickyNote },
   { id: 'rect', label: 'Rectángulo', icon: Square },
   { id: 'arrow', label: 'Flecha', icon: ArrowUpRight },
-  { id: 'whiteout', label: 'Corrector', icon: Square },
-  { id: 'eraser', label: 'Borrar anotación', icon: Eraser },
+  { id: 'whiteout', label: 'Corrector', icon: Eraser },
+  { id: 'eraser', label: 'Borrar anotación', icon: Trash },
 ];
 
 interface FormField {
@@ -75,6 +81,14 @@ export default function PdfEditor() {
   const gestureRef = useRef(false);
   const [gesturing, setGesturing] = useState(false);
   const visiblePage = useRef(0);
+  const [curPage, setCurPage] = useState(0);
+  const [twoUp, setTwoUp] = useState(false);
+  const [pagesOpen, setPagesOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [fitOpen, setFitOpen] = useState(false);
+  const [presenting, setPresenting] = useState(false);
+  const [propsOpen, setPropsOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -249,13 +263,45 @@ export default function PdfEditor() {
     );
   }
 
-  const pageW = containerW * zoom;
+  const gap = 16;
+  /** Pasa un texto a modo de edición en vivo (con el teclado ya abierto). */
+  function startEditText(id: string) {
+    flushSync(() => {
+      setTool(null);
+      setSelected(id);
+      setEditingId(id);
+    });
+    const ta = document.querySelector('textarea[data-edit="' + id + '"]') as HTMLTextAreaElement | null;
+    if (ta) {
+      ta.focus();
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+    }
+  }
+
+  const pageW = twoUp ? Math.max(120, (containerW * zoom - gap) / 2) : containerW * zoom;
   const sel = annots.find((a) => a.id === selected);
+  const scrollToPage = (i: number) => {
+    const el = scroller.current?.querySelector(`[data-page="${i}"]`) as HTMLElement | null;
+    el?.scrollIntoView({ block: 'start' });
+    setCurPage(i);
+  };
+  /** Ajusta el zoom para ver la página completa (alto) o a lo ancho. */
+  async function fitView(mode: 'width' | 'page') {
+    setFitOpen(false);
+    setMenuOpen(false);
+    if (mode === 'width') return setZoom(1);
+    const vp = (await pdf!.getPage(curPage + 1)).getViewport({ scale: 1 });
+    const sh = (scroller.current?.clientHeight || 600) - 32;
+    const cols = twoUp ? 2 : 1;
+    const wAt1 = twoUp ? (containerW - gap) / 2 : containerW;
+    setZoom(Math.max(0.3, Math.min(1, sh / ((vp.height / vp.width) * wAt1)) * (cols === 2 ? 1 : 1)));
+    setTimeout(() => scrollToPage(curPage), 60);
+  }
 
   return (
     <div className="fixed inset-0 flex flex-col bg-bg">
       <header className="safe-top border-b border-line bg-surface">
-        <div className="mx-auto flex h-16 max-w-6xl items-center gap-1 px-2">
+        <div className="mx-auto flex h-14 max-w-6xl items-center gap-1 px-2">
           <IconButton label="Salir" onClick={exit}>
             <X className="size-6" />
           </IconButton>
@@ -270,59 +316,111 @@ export default function PdfEditor() {
             Guardar
           </Button>
         </div>
+        {/* Vista: páginas, número de página, zoom y más opciones */}
+        <div className="mx-auto flex h-12 max-w-6xl items-center gap-1 border-t border-line/60 px-2">
+          <IconButton label="Ver todas las páginas" className="size-10" active={pagesOpen} onClick={() => setPagesOpen((v) => !v)}>
+            <Menu className="size-5" />
+          </IconButton>
+          <span className="rounded-full bg-surface-2 px-3 py-1 text-sm font-bold tabular-nums">
+            {curPage + 1} / {pdf.numPages}
+          </span>
+          <div className="flex-1" />
+          <IconButton label="Alejar" className="size-10" onClick={() => setZoom((z) => Math.max(0.3, z / 1.2))}>
+            <Minus className="size-5" />
+          </IconButton>
+          <button className="h-10 w-14 rounded-xl text-center text-sm font-bold tabular-nums hover:bg-surface-2" onClick={() => setZoom(1)} title="Volver al 100 %">
+            {Math.round(zoom * 100)}%
+          </button>
+          <IconButton label="Acercar" className="size-10" onClick={() => setZoom((z) => Math.min(4, z * 1.2))}>
+            <Plus className="size-5" />
+          </IconButton>
+          <div className="relative">
+            <IconButton label="Más opciones de vista" className="size-10" onClick={() => setMenuOpen((v) => !v)}>
+              <MoreVertical className="size-5" />
+            </IconButton>
+            {menuOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => { setMenuOpen(false); setFitOpen(false); }} />
+                <div className="absolute top-full right-0 z-50 mt-1 w-64 overflow-hidden rounded-2xl border border-line bg-surface py-1 shadow-pop animate-pop">
+                  <MenuRow icon={<Columns2 />} label="Vista de dos páginas" checked={twoUp} onClick={() => { setTwoUp((v) => !v); setMenuOpen(false); }} />
+                  <MenuRow icon={<Presentation />} label="Presentar" onClick={() => { setMenuOpen(false); setPresenting(true); }} />
+                  <MenuRow icon={<Info />} label="Propiedades del documento" onClick={() => { setMenuOpen(false); setPropsOpen(true); }} />
+                  <MenuRow icon={<Maximize2 />} label="Ajustar vista de página" onClick={() => setFitOpen((v) => !v)} />
+                  {fitOpen && (
+                    <div className="mx-2 mb-1 grid gap-1 rounded-xl bg-surface-2 p-1">
+                      <button className="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold hover:bg-surface" onClick={() => fitView('width')}>
+                        <MoveHorizontal className="size-4" /> Ajustar al ancho
+                      </button>
+                      <button className="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold hover:bg-surface" onClick={() => fitView('page')}>
+                        <Maximize2 className="size-4" /> Página completa
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
       </header>
 
-      <div
-        ref={scroller}
-        className="min-h-0 flex-1 overflow-auto overscroll-contain bg-surface-3/60 px-3 py-4"
-        style={{ touchAction: gesturing ? 'none' : undefined }}
-        onScroll={(e) => {
-          const el = e.currentTarget;
-          const kids = Array.from(el.querySelectorAll('[data-page]')) as HTMLElement[];
-          const mid = el.scrollTop + el.clientHeight / 3;
-          for (const k of kids) if (k.offsetTop <= mid && k.offsetTop + k.offsetHeight > mid) visiblePage.current = Number(k.dataset.page);
-        }}
-      >
-        <div className="mx-auto flex flex-col items-center gap-4" style={{ width: pageW }}>
-          {Array.from({ length: pdf.numPages }, (_, i) => (
-            <EditablePage
-              key={i}
-              pdf={pdf}
-              index={i}
-              width={pageW}
-              tool={formMode ? null : tool}
-              gestureRef={gestureRef}
-              setGesturing={setGesturing}
-              onPlaced={(nid) => {
-                setTool(null);
-                setSelected(nid);
-              }}
-              annots={annots.filter((a) => a.page === i)}
-              selected={selected}
-              setSelected={setSelected}
-              style={{ color, hl, width, fontSize }}
-              add={add}
-              update={update}
-              remove={remove}
-              commitMove={(prev) => {
-                setUndo((u) => [...u.slice(-50), prev]);
-                setRedo([]);
-                setDirty(true);
-              }}
-              allAnnots={annots}
-              fields={formMode ? fields.filter((f) => f.page === i) : []}
-              values={values}
-              setValue={(n, v) => {
-                setValues((s) => ({ ...s, [n]: v }));
-                setDirty(true);
-              }}
-            />
-          ))}
+      <div className="relative flex min-h-0 flex-1">
+        {pagesOpen && <PagesPanel pdf={pdf} current={curPage} onPick={(i) => { scrollToPage(i); if (window.innerWidth < 768) setPagesOpen(false); }} onClose={() => setPagesOpen(false)} />}
+        <div
+          ref={scroller}
+          className="min-h-0 min-w-0 flex-1 overflow-auto overscroll-contain bg-surface-3/60 px-3 py-4"
+          style={{ touchAction: gesturing ? 'none' : undefined }}
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            const kids = Array.from(el.querySelectorAll('[data-page]')) as HTMLElement[];
+            const mid = el.scrollTop + el.clientHeight / 3;
+            for (const k of kids) if (k.offsetTop <= mid && k.offsetTop + k.offsetHeight > mid) visiblePage.current = Number(k.dataset.page);
+            if (visiblePage.current !== curPage) setCurPage(visiblePage.current);
+          }}
+        >
+          <div className={`mx-auto ${twoUp ? 'grid grid-cols-2 items-start justify-items-center' : 'flex flex-col items-center'}`} style={{ width: twoUp ? pageW * 2 + gap : pageW, gap }}>
+            {Array.from({ length: pdf.numPages }, (_, i) => (
+              <EditablePage
+                key={i}
+                pdf={pdf}
+                index={i}
+                width={pageW}
+                tool={formMode ? null : tool}
+                gestureRef={gestureRef}
+                setGesturing={setGesturing}
+                onPlaced={(nid) => {
+                  setTool(null);
+                  setSelected(nid);
+                }}
+                annots={annots.filter((a) => a.page === i)}
+                selected={selected}
+                setSelected={setSelected}
+                editingId={editingId}
+                setEditingId={setEditingId}
+                style={{ color, hl, width, fontSize }}
+                add={add}
+                addMany={(xs) => commit([...annots, ...xs])}
+                update={update}
+                remove={remove}
+                commitMove={(prev) => {
+                  setUndo((u) => [...u.slice(-50), prev]);
+                  setRedo([]);
+                  setDirty(true);
+                }}
+                allAnnots={annots}
+                fields={formMode ? fields.filter((f) => f.page === i) : []}
+                values={values}
+                setValue={(n, v) => {
+                  setValues((s) => ({ ...s, [n]: v }));
+                  setDirty(true);
+                }}
+              />
+            ))}
+          </div>
         </div>
       </div>
 
-      {/* Propiedades */}
-      {!formMode && (
+      {/* Propiedades (sólo cuando hay algo que ajustar) */}
+      {!formMode && (tool || sel) && (
         <div className="border-t border-line bg-surface">
           <div className="no-scrollbar mx-auto flex max-w-6xl items-center gap-3 overflow-x-auto px-3 py-2 [&_button]:whitespace-nowrap [&>*]:shrink-0">
             {tool && (
@@ -341,14 +439,7 @@ export default function PdfEditor() {
                     <IconButton label="Letra más grande" onClick={() => update(sel.id, { size: Math.min(96, (sel as any).size + 2) } as any)}>
                       <Plus className="size-5" />
                     </IconButton>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={async () => {
-                        const t = await promptDialog('Editar texto', (sel as any).text);
-                        if (t) update(sel.id, { text: t } as any);
-                      }}
-                    >
+                    <Button variant="secondary" size="sm" onClick={() => startEditText(sel.id)}>
                       Editar texto
                     </Button>
                   </>
@@ -387,18 +478,9 @@ export default function PdfEditor() {
               </>
             ) : (
               <span className="min-w-0 shrink! text-sm leading-snug text-soft">
-                {tool === null ? 'Toca una anotación para seleccionarla, o elige una herramienta abajo.' : tool === 'eraser' ? 'Toca una anotación para borrarla.' : 'Arrastra para tapar contenido con blanco.'}
+                {tool === 'edittext' ? 'Toca un texto del PDF para cambiarlo.' : tool === 'eraser' ? 'Toca una anotación para borrarla.' : 'Arrastra para tapar contenido.'}
               </span>
             )}
-            <div className="ml-auto flex shrink-0 items-center gap-1">
-              <IconButton label="Alejar" onClick={() => setZoom((z) => Math.max(0.5, z / 1.2))}>
-                <Minus className="size-5" />
-              </IconButton>
-              <span className="w-12 text-center text-sm font-bold tabular-nums">{Math.round(zoom * 100)}%</span>
-              <IconButton label="Acercar" onClick={() => setZoom((z) => Math.min(3, z * 1.2))}>
-                <Plus className="size-5" />
-              </IconButton>
-            </div>
           </div>
         </div>
       )}
@@ -444,6 +526,8 @@ export default function PdfEditor() {
       </div>
 
       <SignaturePicker open={sigOpen} onClose={() => setSigOpen(false)} onPick={(b) => placeImage(b, true)} />
+      {presenting && <Presenter pdf={pdf} start={curPage} onClose={(i) => { setPresenting(false); scrollToPage(i); }} />}
+      <DocProps open={propsOpen} onClose={() => setPropsOpen(false)} pdf={pdf} doc={doc} size={bytes?.byteLength || 0} />
 
       <Modal
         open={saveOpen}
@@ -500,6 +584,9 @@ interface PageProps {
   allAnnots: Annot[];
   selected: string | null;
   setSelected: (id: string | null) => void;
+  editingId: string | null;
+  setEditingId: (id: string | null) => void;
+  addMany: (a: Annot[]) => void;
   style: { color: string; hl: string; width: number; fontSize: number };
   add: (a: Annot) => void;
   update: (id: string, patch: Partial<Annot>, record?: boolean) => void;
@@ -531,6 +618,8 @@ function bbox(a: Annot) {
 }
 
 let lastGestureEnd = 0;
+// Último toque sobre una anotación (para detectar el doble toque que abre la edición del texto)
+let lastTap = { id: "", t: 0 };
 
 /** Escala la anotación k veces alrededor de (cx, cy) y luego la desplaza (dx, dy). */
 function transformAnnot(a: Annot, k: number, cx: number, cy: number, dx: number, dy: number): Partial<Annot> {
@@ -602,13 +691,74 @@ function EditablePage(p: PageProps) {
 
   const drawing = !!p.tool && ['pen', 'marker', 'highlight', 'rect', 'arrow', 'whiteout'].includes(p.tool);
 
-  // Toques: seleccionar (sin herramienta), borrar, agregar texto o comentario
-  async function click(e: React.MouseEvent) {
+  // Texto original del PDF (para "Editar texto"): se carga apenas se elige la herramienta
+  type PdfLine = { str: string; x: number; base: number; w: number; size: number; serif: boolean; bold: boolean };
+  const pdfLines = useRef<PdfLine[] | null>(null);
+  useEffect(() => {
+    if (p.tool !== 'edittext' || !page || pdfLines.current) return;
+    (async () => {
+      const vp = page.getViewport({ scale: 1 });
+      const tc: any = await page.getTextContent();
+      const items: PdfLine[] = [];
+      for (const it of tc.items as any[]) {
+        if (!it.str || !it.str.trim()) continue;
+        const t = pdfjs.Util.transform(vp.transform, it.transform);
+        const size = Math.hypot(t[2], t[3]);
+        if (size < 2) continue;
+        const fam = String(tc.styles?.[it.fontName]?.fontFamily || '') + ' ' + String(it.fontName || '');
+        items.push({
+          str: it.str,
+          x: t[4],
+          base: t[5],
+          w: it.width * (vp.scale || 1),
+          size,
+          serif: /serif|times|georgia|garamond|roman|cambria|book/i.test(fam) && !/sans/i.test(fam),
+          bold: /bold|black|heavy|semibold/i.test(fam),
+        });
+      }
+      // Une los pedazos de una misma línea (el PDF suele cortar las líneas en varias partes)
+      items.sort((a, b) => a.base - b.base || a.x - b.x);
+      const lines: PdfLine[] = [];
+      for (const it of items) {
+        const l = lines.find((q) => Math.abs(q.base - it.base) < q.size * 0.3 && it.x - (q.x + q.w) < q.size * 1.2 && it.x >= q.x - 1);
+        if (l) {
+          const gap = it.x - (l.x + l.w);
+          l.str += (gap > l.size * 0.15 && !/\s$/.test(l.str) && !/^\s/.test(it.str) ? ' ' : '') + it.str;
+          l.w = Math.max(l.w, it.x + it.w - l.x);
+        } else lines.push({ ...it });
+      }
+      pdfLines.current = lines;
+    })();
+  }, [p.tool, page]);
+
+  /** Colores del texto y del fondo leyendo los píxeles de la página dibujada. */
+  function sampleColors(x: number, y: number, w: number, h: number) {
+    const c = canvasRef.current;
+    if (!c) return { ink: '#111111', bg: '#ffffff' };
+    const k = c.width / (vp1!.width || 1);
+    const sx = Math.max(0, Math.floor(x * k)), sy = Math.max(0, Math.floor(y * k));
+    const sw = Math.max(1, Math.min(c.width - sx, Math.ceil(w * k))), sh = Math.max(1, Math.min(c.height - sy, Math.ceil(h * k)));
+    const d = c.getContext('2d')!.getImageData(sx, sy, sw, sh).data;
+    const px: [number, number, number, number][] = [];
+    for (let i = 0; i < d.length; i += 4) px.push([d[i], d[i + 1], d[i + 2], 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]]);
+    px.sort((a, b) => a[3] - b[3]);
+    const avg = (arr: typeof px) => arr.reduce((s, q) => [s[0] + q[0], s[1] + q[1], s[2] + q[2]], [0, 0, 0]).map((v) => Math.round(v / Math.max(1, arr.length)));
+    const ink = avg(px.slice(0, Math.max(1, Math.floor(px.length * 0.08))));
+    const bg = avg(px.slice(Math.floor(px.length * 0.6)));
+    const hex = (c3: number[]) => '#' + c3.map((v) => v.toString(16).padStart(2, '0')).join('');
+    const same = Math.abs(ink[0] - bg[0]) + Math.abs(ink[1] - bg[1]) + Math.abs(ink[2] - bg[2]) < 60;
+    return { ink: same ? '#111111' : hex(ink), bg: hex(bg) };
+  }
+
+  // Toques: seleccionar (sin herramienta), borrar, agregar o cambiar texto, comentario
+  function click(e: React.MouseEvent) {
     if (Date.now() - lastGestureEnd < 400) return;
     const pt = toPage(e);
     const target = (e.target as Element).closest('[data-id]') as HTMLElement | null;
     if (p.tool === null) {
-      p.setSelected(target ? target.dataset.id! : null);
+      const id = target ? target.dataset.id! : null;
+      p.setSelected(id);
+      if (id) lastTap = { id, t: Date.now() };
       return;
     }
     if (p.tool === 'eraser') {
@@ -616,19 +766,52 @@ function EditablePage(p: PageProps) {
       return;
     }
     if (p.tool === 'text') {
-      const t = await promptDialog('Agregar texto', '', { label: 'Texto', placeholder: 'Escribe aquí', confirmText: 'Agregar' });
-      if (!t) return;
+      // Se escribe directamente sobre la página
       const nid = uid();
-      p.add({ id: nid, page: p.index, type: 'text', x: pt.x, y: pt.y - p.style.fontSize * 0.6, w: 0, text: t, size: p.style.fontSize, color: p.style.color });
-      p.onPlaced(nid);
+      flushSync(() => {
+        p.add({ id: nid, page: p.index, type: 'text', x: pt.x, y: pt.y - p.style.fontSize * 0.6, w: 0, text: '', size: p.style.fontSize, color: p.style.color });
+        p.onPlaced(nid);
+      });
+      focusEditor(nid);
+      return;
+    }
+    if (p.tool === 'edittext') {
+      const lines = pdfLines.current;
+      if (!lines) return toast('Leyendo el texto de la página…', 'info');
+      const hit = lines.find((l) => pt.x >= l.x - 2 && pt.x <= l.x + l.w + 2 && pt.y >= l.base - l.size * 0.95 && pt.y <= l.base + l.size * 0.3);
+      if (!hit) return toast('Aquí no hay texto que se pueda cambiar. Si es una foto o un escaneo, usa “Corrector” y “Texto”.', 'info', 4500);
+      const top = hit.base - hit.size * 0.92;
+      const colors = sampleColors(hit.x, hit.base - hit.size * 0.8, hit.w, hit.size);
+      const cover: Annot = { id: uid(), page: p.index, type: 'whiteout', x: hit.x - 1, y: hit.base - hit.size * 0.95, w: hit.w + 2, h: hit.size * 1.25, color: colors.bg };
+      const nid = uid();
+      const txt: Annot = { id: nid, page: p.index, type: 'text', x: hit.x, y: top, w: 0, text: hit.str, size: hit.size, color: colors.ink, bold: hit.bold, serif: hit.serif };
+      // la línea ya no se puede volver a tomar (ahora es una anotación)
+      pdfLines.current = lines.filter((l) => l !== hit);
+      flushSync(() => {
+        p.addMany([cover, txt]);
+        p.onPlaced(nid);
+      });
+      focusEditor(nid);
       return;
     }
     if (p.tool === 'note') {
-      const t = await promptDialog('Agregar comentario', '', { label: 'Comentario', confirmText: 'Agregar' });
-      if (!t) return;
-      const nid = uid();
-      p.add({ id: nid, page: p.index, type: 'note', x: pt.x - 10, y: pt.y - 10, text: t, color: '#facc15' });
-      p.onPlaced(nid);
+      (async () => {
+        const t = await promptDialog('Agregar comentario', '', { label: 'Comentario', confirmText: 'Agregar' });
+        if (!t) return;
+        const nid = uid();
+        p.add({ id: nid, page: p.index, type: 'note', x: pt.x - 10, y: pt.y - 10, text: t, color: '#facc15' });
+        p.onPlaced(nid);
+      })();
+    }
+  }
+
+  /** Abre la edición en vivo de un texto y enfoca el cuadro (en el mismo toque, para que salga el teclado). */
+  function focusEditor(id: string) {
+    flushSync(() => p.setEditingId(id));
+    const ta = holder.current?.querySelector('textarea[data-edit="' + id + '"]') as HTMLTextAreaElement | null;
+    if (ta) {
+      ta.focus();
+      ta.setSelectionRange(ta.value.length, ta.value.length);
     }
   }
 
@@ -744,6 +927,14 @@ function EditablePage(p: PageProps) {
       const prev = g.prev;
       g.stop();
       if (changed) commitMove(prev);
+      else if (!g.handle && g.orig.type === 'text') {
+        // Doble toque (o doble clic) sobre un texto: se edita ahí mismo
+        const now = Date.now();
+        if (lastTap.id === g.orig.id && now - lastTap.t < 450) {
+          lastTap = { id: '', t: 0 };
+          focusEditor(g.orig.id);
+        } else lastTap = { id: g.orig.id, t: now };
+      }
     };
     const stop = () => {
       window.removeEventListener('pointerdown', onDown, true);
@@ -767,6 +958,10 @@ function EditablePage(p: PageProps) {
 
   const list = draft ? [...p.annots, draft] : p.annots;
   const selA = p.annots.find((a) => a.id === p.selected);
+  const editA = p.annots.find((a) => a.id === p.editingId) as (Annot & { type: 'text' }) | undefined;
+  // Estado antes de editar el texto, para poder deshacer el cambio completo
+  const editStart = useRef<{ text: string; all: Annot[] } | null>(null);
+  if (editA && !editStart.current) editStart.current = { text: editA.text, all: p.allAnnots };
 
   return (
     <div data-page={p.index} ref={holder} className="relative shrink-0 bg-white shadow-card" style={{ width: p.width, height: H }}>
@@ -789,12 +984,27 @@ function EditablePage(p: PageProps) {
             </marker>
           </defs>
           {list.map((a) => (
-            <AnnotShape key={a.id} a={a} marker={`url(#arr-${p.index})`} />
+            <AnnotShape key={a.id} a={a} marker={`url(#arr-${p.index})`} hidden={a.id === p.editingId} />
           ))}
         </svg>
       )}
       {/* selección: arrastrar para mover; pellizcar o usar la esquina para cambiar el tamaño */}
-      {selA && p.tool === null && (() => {
+      {editA && editA.type === 'text' && (
+        <LiveText
+          key={editA.id}
+          a={editA}
+          scale={scale}
+          onChange={(text) => p.update(editA.id, { text } as any, false)}
+          onDone={(text) => {
+            const before = editStart.current;
+            editStart.current = null;
+            p.setEditingId(null);
+            if (!text.trim()) p.remove(editA.id);
+            else if (before && before.text !== text) p.commitMove(before.all);
+          }}
+        />
+      )}
+      {selA && p.tool === null && !editA && (() => {
         const b = bbox(selA);
         const pad = 6;
         let L = b.x * scale - pad;
@@ -857,7 +1067,10 @@ function EditablePage(p: PageProps) {
   );
 }
 
-function AnnotShape({ a, marker }: { a: Annot; marker: string }) {
+const SANS = 'Helvetica, Arial, sans-serif';
+const SERIF = '"Times New Roman", Times, serif';
+
+function AnnotShape({ a, marker, hidden }: { a: Annot; marker: string; hidden?: boolean }) {
   switch (a.type) {
     case 'ink': {
       const pts = a.pts.map((q) => `${q.x},${q.y}`).join(' ');
@@ -884,7 +1097,7 @@ function AnnotShape({ a, marker }: { a: Annot; marker: string }) {
       );
     case 'text':
       return (
-        <text data-id={a.id} x={a.x} y={a.y} fill={a.color} fontSize={a.size} fontFamily="Helvetica, Arial, sans-serif" fontWeight={a.bold ? 700 : 400} style={{ userSelect: 'none' }}>
+        <text data-id={a.id} x={a.x} y={a.y} fill={a.color} fontSize={a.size} fontFamily={a.serif ? SERIF : SANS} fontWeight={a.bold ? 700 : 400} style={{ userSelect: 'none' }} opacity={hidden ? 0 : 1}>
           {a.text.split('\n').map((l, i) => (
             <tspan key={i} x={a.x} dy={i === 0 ? a.size * 0.92 : a.size * 1.25}>
               {l || ' '}
@@ -903,4 +1116,245 @@ function AnnotShape({ a, marker }: { a: Annot; marker: string }) {
     case 'image':
       return <image data-id={a.id} href={a.src} x={a.x} y={a.y} width={a.w} height={a.h} preserveAspectRatio="none" />;
   }
+}
+
+function MenuRow({ icon, label, onClick, checked }: { icon: React.ReactNode; label: string; onClick: () => void; checked?: boolean }) {
+  return (
+    <button onClick={onClick} className="flex w-full items-center gap-3 px-4 py-2.5 text-left font-semibold hover:bg-surface-2">
+      <span className="text-soft [&>svg]:size-5">{icon}</span>
+      <span className="flex-1">{label}</span>
+      {checked && <Check className="size-5 text-primary" />}
+    </button>
+  );
+}
+
+/** Vista general de las páginas (miniaturas) para saltar a cualquiera. */
+function PagesPanel({ pdf, current, onPick, onClose }: { pdf: PDFDocumentProxy; current: number; onPick: (i: number) => void; onClose: () => void }) {
+  const list = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    list.current?.querySelector(`[data-thumb="${current}"]`)?.scrollIntoView({ block: 'nearest' });
+  }, [current]);
+  return (
+    <>
+      <div className="absolute inset-0 z-20 bg-black/30 md:hidden" onClick={onClose} />
+      <aside className="absolute inset-y-0 left-0 z-30 flex w-40 flex-col border-r border-line bg-neutral-800 shadow-pop animate-fade md:relative md:z-0 md:shadow-none">
+        <div ref={list} className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4">
+          {Array.from({ length: pdf.numPages }, (_, i) => (
+            <button key={i} data-thumb={i} onClick={() => onPick(i)} className="mb-4 block w-full text-center">
+              <div className={`rounded-md p-1 transition ${i === current ? 'bg-primary/60' : 'hover:bg-white/10'}`}>
+                <PageThumb pdf={pdf} index={i} className="rounded-sm bg-white" />
+              </div>
+              <span className={`mt-1 block text-sm font-bold ${i === current ? 'text-white' : 'text-white/70'}`}>{i + 1}</span>
+            </button>
+          ))}
+        </div>
+      </aside>
+    </>
+  );
+}
+
+/** Modo presentación: una página a pantalla completa, se pasa con flechas, toques o deslizando. */
+function Presenter({ pdf, start, onClose }: { pdf: PDFDocumentProxy; start: number; onClose: (page: number) => void }) {
+  const [i, setI] = useState(start);
+  const cv = useRef<HTMLCanvasElement>(null);
+  const box = useRef<HTMLDivElement>(null);
+  const touchX = useRef<number | null>(null);
+  const go = (d: number) => setI((v) => Math.max(0, Math.min(pdf.numPages - 1, v + d)));
+  useEffect(() => {
+    box.current?.requestFullscreen?.().catch(() => {});
+    const k = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') go(1);
+      if (e.key === 'ArrowLeft' || e.key === 'PageUp') go(-1);
+      if (e.key === 'Escape') close();
+    };
+    const fs = () => {
+      if (!document.fullscreenElement) onCloseRef.current();
+    };
+    window.addEventListener('keydown', k);
+    document.addEventListener('fullscreenchange', fs);
+    return () => {
+      window.removeEventListener('keydown', k);
+      document.removeEventListener('fullscreenchange', fs);
+    };
+  }, []);
+  const iRef = useRef(i);
+  iRef.current = i;
+  const onCloseRef = useRef(() => onClose(iRef.current));
+  onCloseRef.current = () => onClose(iRef.current);
+  function close() {
+    if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+    onCloseRef.current();
+  }
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      const page = await pdf.getPage(i + 1);
+      const vp = page.getViewport({ scale: 1 });
+      const W = window.innerWidth, H = window.innerHeight;
+      const s = Math.min(W / vp.width, H / vp.height) * Math.min(2, devicePixelRatio || 1);
+      if (!live || !cv.current) return;
+      await renderPage(page, s, cv.current);
+    })();
+    return () => {
+      live = false;
+    };
+  }, [i]);
+  return (
+    <div
+      ref={box}
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-black"
+      onClick={(e) => go(e.clientX > window.innerWidth / 2 ? 1 : -1)}
+      onTouchStart={(e) => (touchX.current = e.touches[0].clientX)}
+      onTouchEnd={(e) => {
+        const s = touchX.current;
+        touchX.current = null;
+        if (s === null) return;
+        const dx = e.changedTouches[0].clientX - s;
+        if (Math.abs(dx) > 50) {
+          e.preventDefault();
+          go(dx < 0 ? 1 : -1);
+        }
+      }}
+    >
+      <canvas ref={cv} className="max-h-full max-w-full object-contain" style={{ width: 'auto', height: 'auto', maxHeight: '100dvh' }} />
+      <div className="safe-top absolute inset-x-0 top-0 flex items-center justify-between p-3 opacity-80">
+        <button
+          aria-label="Salir de la presentación"
+          onClick={(e) => {
+            e.stopPropagation();
+            close();
+          }}
+          className="flex size-11 items-center justify-center rounded-full bg-white/15 text-white"
+        >
+          <X className="size-6" />
+        </button>
+        <span className="rounded-full bg-white/15 px-3 py-1 text-sm font-bold text-white tabular-nums">
+          {i + 1} / {pdf.numPages}
+        </span>
+      </div>
+      <div className="safe-bottom absolute inset-x-0 bottom-0 flex justify-center gap-3 p-3 opacity-70">
+        <button aria-label="Página anterior" onClick={(e) => { e.stopPropagation(); go(-1); }} className="flex size-11 items-center justify-center rounded-full bg-white/15 text-white">
+          <ChevronLeft className="size-6" />
+        </button>
+        <button aria-label="Página siguiente" onClick={(e) => { e.stopPropagation(); go(1); }} className="flex size-11 items-center justify-center rounded-full bg-white/15 text-white">
+          <ChevronRight className="size-6" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Propiedades del documento (metadatos del PDF). */
+function DocProps({ open, onClose, pdf, doc, size }: { open: boolean; onClose: () => void; pdf: PDFDocumentProxy; doc: DocMeta; size: number }) {
+  const [rows, setRows] = useState<[string, string][]>([]);
+  useEffect(() => {
+    if (!open) return;
+    (async () => {
+      const md: any = await pdf.getMetadata().catch(() => ({}));
+      const info = md?.info || {};
+      const vp = (await pdf.getPage(1)).getViewport({ scale: 1 });
+      const mm = (pt: number) => Math.round((pt / 72) * 25.4);
+      const named = (w: number, h: number) => {
+        const [a, b] = [Math.min(w, h), Math.max(w, h)];
+        if (Math.abs(a - 210) < 3 && Math.abs(b - 297) < 3) return ' (A4)';
+        if (Math.abs(a - 216) < 3 && Math.abs(b - 279) < 3) return ' (Carta)';
+        if (Math.abs(a - 216) < 3 && Math.abs(b - 356) < 3) return ' (Oficio)';
+        return '';
+      };
+      const date = (s?: string) => {
+        const m = /D:(\d{4})(\d{2})?(\d{2})?(\d{2})?(\d{2})?(\d{2})?([Z+-])?(\d{2})?'?(\d{2})?/.exec(s || '');
+        if (!m) return '';
+        const parts = [+m[1], +(m[2] || 1) - 1, +(m[3] || 1), +(m[4] || 0), +(m[5] || 0), +(m[6] || 0)] as const;
+        let d: Date;
+        if (m[7]) {
+          // Fecha con zona horaria (Z = UTC, o +HH'mm / -HH'mm)
+          const off = m[7] === 'Z' ? 0 : (m[7] === '-' ? -1 : 1) * ((+(m[8] || 0)) * 60 + +(m[9] || 0));
+          d = new Date(Date.UTC(...parts) - off * 60000);
+        } else d = new Date(...parts);
+        return d.toLocaleString('es', { dateStyle: 'medium', timeStyle: 'short' });
+      };
+      const w = mm(vp.width), h = mm(vp.height);
+      const out: [string, string][] = [
+        ['Nombre', doc.name],
+        ['Título', info.Title || ''],
+        ['Autor', info.Author || ''],
+        ['Asunto', info.Subject || ''],
+        ['Palabras clave', info.Keywords || ''],
+        ['Creado con', info.Creator || ''],
+        ['Generado por', info.Producer || ''],
+        ['Fecha de creación', date(info.CreationDate)],
+        ['Última modificación', date(info.ModDate)],
+        ['Páginas', String(pdf.numPages)],
+        ['Tamaño de página', `${w} × ${h} mm${named(w, h)}`],
+        ['Peso del archivo', formatBytes(size)],
+        ['Versión de PDF', info.PDFFormatVersion || ''],
+        ['Con contraseña', md?.info?.IsEncrypted || (pdf as any)._transport?.encrypted ? 'Sí' : 'No'],
+      ];
+      setRows(out.filter(([, v]) => v));
+    })();
+  }, [open]);
+  return (
+    <Modal open={open} onClose={onClose} title="Propiedades del documento">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+        {rows.map(([k, v]) => (
+          <div key={k} className="contents">
+            <dt className="font-bold text-soft">{k}</dt>
+            <dd className="font-semibold break-words">{v}</dd>
+          </div>
+        ))}
+      </dl>
+    </Modal>
+  );
+}
+
+/** Cuadro para escribir sobre la página: el texto cambia en el PDF mientras se escribe. */
+function LiveText({ a, scale, onChange, onDone }: { a: Annot & { type: 'text' }; scale: number; onChange: (t: string) => void; onDone: (t: string) => void }) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const [val, setVal] = useState(a.text);
+  const font = `${a.bold ? 700 : 400} ${a.size * scale}px ${a.serif ? SERIF : SANS}`;
+  // ancho según el texto escrito (se mide con la misma letra)
+  const measure = (t: string) => {
+    const c = (LiveText as any)._c || ((LiveText as any)._c = document.createElement('canvas').getContext('2d'));
+    c.font = font;
+    return Math.max(...t.split('\n').map((l) => c.measureText(l || ' ').width));
+  };
+  const lines = val.split('\n').length;
+  const w = Math.max(a.size * scale * 3, measure(val) + a.size * scale * 1.2);
+  const h = lines * a.size * scale * 1.25 + 6;
+  useEffect(() => {
+    // Por si no se enfocó en el mismo toque (computador)
+    const t = setTimeout(() => {
+      if (document.activeElement !== ref.current) ref.current?.focus();
+    }, 50);
+    return () => clearTimeout(t);
+  }, []);
+  return (
+    <textarea
+      ref={ref}
+      data-edit={a.id}
+      value={val}
+      spellCheck={false}
+      autoCapitalize="sentences"
+      placeholder="Escribe aquí"
+      onChange={(e) => {
+        setVal(e.target.value);
+        onChange(e.target.value);
+      }}
+      onBlur={() => onDone(val)}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') (e.target as HTMLTextAreaElement).blur();
+      }}
+      className="absolute z-10 resize-none overflow-hidden rounded-sm bg-white/40 p-0 outline-2 outline-offset-2 outline-blue-500 outline-dashed placeholder:text-slate-400"
+      style={{
+        left: a.x * scale,
+        top: a.y * scale - 1,
+        width: w,
+        height: h,
+        font,
+        lineHeight: 1.25,
+        color: a.color,
+        border: 'none',
+      }}
+    />
+  );
 }

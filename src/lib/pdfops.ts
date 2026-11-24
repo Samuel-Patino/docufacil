@@ -528,7 +528,7 @@ export type Annot =
   | { id: string; page: number; type: 'ink'; pts: { x: number; y: number }[]; color: string; width: number; opacity: number }
   | { id: string; page: number; type: 'highlight' | 'whiteout' | 'rect'; x: number; y: number; w: number; h: number; color: string; width?: number }
   | { id: string; page: number; type: 'line' | 'arrow'; x1: number; y1: number; x2: number; y2: number; color: string; width: number }
-  | { id: string; page: number; type: 'text'; x: number; y: number; w: number; text: string; size: number; color: string; bold?: boolean }
+  | { id: string; page: number; type: 'text'; x: number; y: number; w: number; text: string; size: number; color: string; bold?: boolean; serif?: boolean }
   | { id: string; page: number; type: 'note'; x: number; y: number; text: string; color: string }
   | { id: string; page: number; type: 'image'; x: number; y: number; w: number; h: number; src: string; signature?: boolean };
 
@@ -538,6 +538,8 @@ export async function applyAnnotations(bytes: Uint8Array, annots: Annot[], passw
   const font = await d.embedFont(StandardFonts.Helvetica);
   const bold = await d.embedFont(StandardFonts.HelveticaBold);
   const imgCache = new Map<string, any>();
+  const serifFonts: Record<string, any> = {};
+  const serifFont = async (b?: boolean) => (serifFonts[b ? 'b' : 'r'] ??= await d.embedFont(b ? StandardFonts.TimesRomanBold : StandardFonts.TimesRoman));
   for (const a of annots) {
     const p = d.getPage(a.page);
     const { rot } = pageBox(p);
@@ -589,7 +591,7 @@ export async function applyAnnotations(bytes: Uint8Array, annots: Annot[], passw
         break;
       }
       case 'text': {
-        const f = a.bold ? bold : font;
+        const f = a.serif ? await serifFont(a.bold) : a.bold ? bold : font;
         const lines = a.text.split('\n');
         lines.forEach((ln, i) => {
           const pt = U(a.x, a.y + a.size * (i * 1.25 + 0.92));

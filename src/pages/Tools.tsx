@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Search, X } from 'lucide-react';
-import { TOOLS, GROUPS, type ToolDef } from '../lib/tools';
+import { TOOLS, GROUPS, RECOMMENDED, toolById, type ToolDef, type GroupId } from '../lib/tools';
 import { inputCls, IconButton } from '../components/ui';
 import { openFromDevice } from '../lib/device';
 import { ConvertIcon } from '../components/FormatIcon';
@@ -14,7 +14,15 @@ export default function Tools() {
   const refs = useRef<Record<string, HTMLElement | null>>({});
   const t = q.trim().toLowerCase();
   const list = TOOLS.filter((x) => !t || (x.title + ' ' + x.desc).toLowerCase().includes(t));
-  const groups = GROUPS.filter((g) => list.some((x) => x.group === g.id));
+  // "Recomendados" repite herramientas de otras secciones: se oculta al buscar para no duplicar resultados
+  const itemsOf = (g: GroupId): ToolDef[] => (g === 'recommended' ? (t ? [] : RECOMMENDED.map((id) => toolById(id)!).filter(Boolean)) : list.filter((x) => x.group === g));
+  const groups = GROUPS.filter((g) => itemsOf(g.id).length > 0);
+  const [params] = useSearchParams();
+  // ?s=seccion: llega directo a una sección (p. ej. desde "Convertir PDF" en el inicio)
+  useEffect(() => {
+    const s = params.get('s');
+    if (s) setTimeout(() => jump(s), 150);
+  }, []);
 
   // marca la sección visible mientras se desplaza
   useEffect(() => {
@@ -89,7 +97,7 @@ export default function Tools() {
       {list.length === 0 && <p className="py-10 text-center text-soft">No hay herramientas con ese nombre.</p>}
 
       {groups.map((g) => {
-        const items = list.filter((x) => x.group === g.id);
+        const items = itemsOf(g.id);
         return (
           <section key={g.id} data-group={g.id} ref={(el) => { refs.current[g.id] = el; }} className="mb-7 scroll-mt-20">
             <h2 className="mb-3 text-lg font-extrabold sm:text-xl">{g.title}</h2>

@@ -9,14 +9,14 @@ import { CSS } from '@dnd-kit/utilities';
 import {
   ScanLine, Upload, FolderPlus, Search, MoreVertical, Folder as FolderIcon, Lock, ChevronRight, Home as HomeIcon,
   LayoutGrid, List, ArrowUpDown, CheckSquare, X, Trash2, FolderInput, Share2, Combine, IdCard, Wrench, Unlock, Pencil, Palette, FileStack,
-  GripVertical,
+  GripVertical, FilePen, FileType2, PenLine, FileOutput, FileInput,
 } from 'lucide-react';
 import { useLibrary } from '../lib/hooks';
 import type { DocMeta, Folder } from '../lib/db';
 import { useApp, toast, promptDialog, confirmDialog, requireUnlock, errMsg, withBusy } from '../lib/store';
 import {
   createFolder, importFiles, folderLocked, docLocked, moveItems, reorder, deleteDocs, deleteFolder, updateFolder,
-  setFolderLocked, getDocFile, FOLDER_COLORS,
+  setFolderLocked, getDocFile, FOLDER_COLORS, listSignatures,
 } from '../lib/library';
 import { pickFiles } from '../lib/share';
 import { lockNow } from '../lib/lock';
@@ -25,6 +25,8 @@ import { formatBytes, formatDate, pagesLabel } from '../lib/util';
 import { Button, IconButton, Modal, MenuItem, Empty, inputCls, Segmented, Card, ColorDots } from '../components/ui';
 import { DocThumb } from '../components/DocIcon';
 import { DocMenu, MoveDialog } from '../components/DocMenu';
+import { SignaturePicker } from '../components/Signature';
+import { FeedbackButton } from '../components/Feedback';
 import { Logo } from '../components/Layout';
 
 export default function Home() {
@@ -43,6 +45,12 @@ export default function Home() {
   const [sortOpen, setSortOpen] = useState(false);
   const [dragging, setDragging] = useState<string | null>(null);
   const [dropHover, setDropHover] = useState(false);
+  const [convOpen, setConvOpen] = useState(false);
+  const [sigOpen, setSigOpen] = useState(false);
+  const [hasSignature, setHasSignature] = useState<boolean | null>(null);
+  useEffect(() => {
+    listSignatures().then((l) => setHasSignature(l.length > 0)).catch(() => setHasSignature(null));
+  }, [sigOpen]);
 
   const fm = useMemo(() => new Map(folders.map((f) => [f.id, f])), [folders]);
   const current = folderId ? fm.get(folderId) : undefined;
@@ -192,6 +200,7 @@ export default function Home() {
         </div>
         <h1 className="hidden flex-1 text-2xl font-black lg:block">{current ? current.name : 'Mis documentos'}</h1>
         <div className="flex-1 lg:hidden" />
+        <FeedbackButton />
         {unlocked && (
           <IconButton label="Bloquear ahora" className="text-primary lg:hidden" onClick={lockNow}>
             <Lock className="size-6" />
@@ -212,12 +221,27 @@ export default function Home() {
 
       {/* Acciones rápidas */}
       {!folderId && !searching && (
-        <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <Quick color="#2563eb" icon={<ScanLine />} label="Escanear" sub="Con la cámara" onClick={() => nav('/scan')} />
-          <Quick color="#0d9488" icon={<Upload />} label="Importar" sub="Fotos y archivos" onClick={() => doImport()} />
-          <Quick color="#9333ea" icon={<IdCard />} label="Cédula" sub="Frente y reverso" onClick={() => nav('/scan?mode=idcard')} />
-          <Quick color="#ea580c" icon={<Wrench />} label="Herramientas" sub="Convertir, unir…" onClick={() => nav('/tools')} />
+        <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <Quick color="#ea580c" icon={<Wrench />} label="Todas las herramientas" sub="Convertir, unir, firmar…" onClick={() => nav('/tools')} />
+          <Quick color="#dc2626" icon={<FilePen />} label="Editar PDF" sub="Texto, firmas, dibujos" onClick={() => nav('/tool/annotate')} />
+          <Quick color="#2563eb" icon={<Combine />} label="Unir PDF" sub="Varios en uno" onClick={() => nav('/tool/merge')} />
+          <Quick color="#9333ea" icon={<FileType2 />} label="Convertir PDF" sub="A PDF o desde PDF" onClick={() => setConvOpen(true)} />
         </div>
+      )}
+
+      {/* Sugerencia: crear la firma una vez */}
+      {!folderId && !searching && hasSignature === false && (
+        <button
+          onClick={() => setSigOpen(true)}
+          className="mb-5 flex w-full items-center gap-3 rounded-2xl border border-dashed border-primary/50 bg-primary-soft/60 px-4 py-3 text-left transition active:scale-[0.99]"
+        >
+          <PenLine className="size-6 shrink-0 text-primary" />
+          <span className="min-w-0 flex-1">
+            <span className="block font-extrabold text-primary">Crear o guardar firma</span>
+            <span className="block text-sm text-soft">Hazla una vez y úsala para firmar cualquier documento.</span>
+          </span>
+          <ChevronRight className="size-5 shrink-0 text-primary" />
+        </button>
       )}
 
       {/* Ruta de carpetas */}
@@ -331,12 +355,7 @@ export default function Home() {
                   icon={<FileStack className="size-10" />}
                   title={folderId ? 'Carpeta vacía' : 'Aún no tienes documentos'}
                   text="Escanea con la cámara o importa fotos, PDF y archivos de Office."
-                  action={
-                    <div className="flex flex-wrap justify-center gap-2">
-                      <Button icon={<ScanLine className="size-5" />} onClick={() => nav('/scan')}>Escanear</Button>
-                      <Button variant="secondary" icon={<Upload className="size-5" />} onClick={() => doImport()}>Importar</Button>
-                    </div>
-                  }
+                  action={<BigActions onScan={() => nav('/scan')} onImport={() => doImport()} />}
                 />
               )
             ) : (
@@ -358,6 +377,11 @@ export default function Home() {
                   ))}
                 </div>
               </SortableContext>
+            )}
+            {!searching && items.length > 0 && (
+              <div className="mt-8">
+                <BigActions onScan={() => nav('/scan')} onImport={() => doImport()} />
+              </div>
             )}
           </section>
           <DragOverlay>{null}</DragOverlay>
@@ -410,6 +434,35 @@ export default function Home() {
         </div>
       )}
 
+      <Modal open={convOpen} onClose={() => setConvOpen(false)} title="Convertir PDF">
+        <div className="grid gap-3">
+          {(
+            [
+              ['topdf', 'Convertir a PDF', 'Fotos, Word, Excel, PowerPoint, texto o páginas web', <FileInput key="a" />, '#16a34a'],
+              ['frompdf', 'Convertir desde PDF', 'A Word, Excel, PowerPoint, JPG o texto', <FileOutput key="b" />, '#2563eb'],
+            ] as const
+          ).map(([id, t, s, ic, colr]) => (
+            <button
+              key={id}
+              onClick={() => {
+                setConvOpen(false);
+                nav('/tools?s=' + id);
+              }}
+              className="flex items-center gap-4 rounded-2xl border border-line bg-surface p-4 text-left transition hover:bg-surface-2 active:scale-[0.99]"
+            >
+              <span className="flex size-12 shrink-0 items-center justify-center rounded-2xl text-white [&>svg]:size-6" style={{ background: colr }}>
+                {ic}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-lg font-extrabold">{t}</span>
+                <span className="block text-sm text-soft">{s}</span>
+              </span>
+              <ChevronRight className="size-5 text-faint" />
+            </button>
+          ))}
+        </div>
+      </Modal>
+      <SignaturePicker open={sigOpen} onClose={() => setSigOpen(false)} />
       <DocMenu doc={menuDoc} open={!!menuDoc} onClose={() => setMenuDoc(null)} />
       <FolderMenu f={menuFolder} onClose={() => setMenuFolder(null)} onMove={(f) => setMoveOpen({ docs: [], folders: [f.id] })} />
       {moveOpen && (
@@ -603,5 +656,29 @@ function FolderMenu({ f, onClose, onMove }: { f: Folder | null; onClose: () => v
         <ColorDots value={f.color} colors={FOLDER_COLORS} onChange={async (c) => { await updateFolder(f.id, { color: c }); setColorOpen(false); onClose(); }} />
       </Modal>
     </>
+  );
+}
+
+/** Botones grandes y cuadrados para escanear o importar. */
+function BigActions({ onScan, onImport }: { onScan: () => void; onImport: () => void }) {
+  const Item = ({ icon, label, sub, color, onClick }: { icon: React.ReactNode; label: string; sub: string; color: string; onClick: () => void }) => (
+    <button
+      onClick={onClick}
+      className="flex aspect-square flex-col items-center justify-center gap-3 rounded-3xl border border-line bg-surface p-4 text-center shadow-card transition hover:-translate-y-0.5 active:scale-[0.98]"
+    >
+      <span className="flex size-16 items-center justify-center rounded-3xl text-white shadow-card [&>svg]:size-8 sm:size-20 sm:[&>svg]:size-10" style={{ background: color }}>
+        {icon}
+      </span>
+      <span>
+        <span className="block text-lg font-extrabold leading-tight sm:text-xl">{label}</span>
+        <span className="block text-sm text-soft">{sub}</span>
+      </span>
+    </button>
+  );
+  return (
+    <div className="mx-auto grid w-[min(calc(100vw-2rem),26rem)] grid-cols-2 gap-3 sm:gap-4">
+      <Item icon={<ScanLine />} label="Escanear" sub="Con la cámara" color="#2563eb" onClick={onScan} />
+      <Item icon={<Upload />} label="Importar" sub="Fotos y archivos" color="#0d9488" onClick={onImport} />
+    </div>
   );
 }

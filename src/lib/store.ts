@@ -32,7 +32,7 @@ const DEFAULT_PREFS: Prefs = {
   defaultFilter: 'mode',
   quality: 'high',
   ocrLang: 'spa+eng',
-  ocrOnSave: false,
+  ocrOnSave: true,
   pageSize: 'fit',
   readerTheme: 'light',
   readerSize: 19,
@@ -45,7 +45,9 @@ function loadPrefs(): Prefs {
     const saved = JSON.parse(localStorage.getItem('df-ui') || '{}');
     // v2: la captura automática pasa a estar apagada por defecto
     if (!saved.v) delete saved.autoCapture;
-    return { ...DEFAULT_PREFS, ...saved, v: 2 };
+    // v3: el texto de los PDF escaneados queda seleccionable por defecto
+    if (!saved.v || saved.v < 3) delete saved.ocrOnSave;
+    return { ...DEFAULT_PREFS, ...saved, v: 3 };
   } catch {
     return DEFAULT_PREFS;
   }

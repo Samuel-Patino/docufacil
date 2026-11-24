@@ -19,14 +19,20 @@ export interface ToolDef {
   conv?: [Fmt, Fmt]; // ícono origen → destino
 }
 
-export const GROUPS: { id: ToolDef['group']; title: string }[] = [
-  { id: 'scan', title: 'Escanear' },
-  { id: 'edit', title: 'Editar y firmar' },
+export type GroupId = ToolDef['group'] | 'recommended';
+
+export const GROUPS: { id: GroupId; title: string }[] = [
+  { id: 'recommended', title: 'Recomendados' },
+  { id: 'organize', title: 'Organizar y optimizar' },
   { id: 'topdf', title: 'Convertir a PDF' },
   { id: 'frompdf', title: 'Convertir desde PDF' },
-  { id: 'organize', title: 'Organizar y optimizar' },
+  { id: 'scan', title: 'Escanear' },
+  { id: 'edit', title: 'Editar y firmar' },
   { id: 'security', title: 'Seguridad' },
 ];
+
+/** Herramientas que se muestran también en "Recomendados" (en este orden). */
+export const RECOMMENDED = ['scan', 'annotate', 'sign', 'merge', 'unlock'];
 
 const C = { red: '#ef4444', blue: '#2563eb', green: '#16a34a', orange: '#ea580c', purple: '#9333ea', teal: '#0d9488', slate: '#475569', pink: '#db2777', amber: '#d97706' };
 
@@ -40,7 +46,7 @@ export const TOOLS: ToolDef[] = [
 
   // Editar
   { id: 'sign', title: 'Firmar PDF', desc: 'Crea tu firma una vez y reutilízala', icon: PenLine, color: C.blue, group: 'edit', input: 'pdf' },
-  { id: 'annotate', title: 'Anotar PDF', desc: 'Resaltar, notas, dibujos, texto e imágenes', icon: Highlighter, color: C.amber, group: 'edit', input: 'pdf' },
+  { id: 'annotate', title: 'Editar PDF', desc: 'Texto, firmas, resaltar, dibujos e imágenes', icon: FilePen, color: C.red, group: 'edit', input: 'pdf' },
   { id: 'form', title: 'Llenar formulario', desc: 'Completa campos de un PDF', icon: FormInput, color: C.teal, group: 'edit', input: 'pdf' },
   { id: 'editphoto', title: 'Editar foto del dispositivo', desc: 'Recorta, filtra o borra y guarda en Fotos', icon: ImageUp, color: C.pink, group: 'edit', route: '/image/device' },
   { id: 'editpdf', title: 'Editar PDF del dispositivo', desc: 'Abre de Archivos, edita y guarda', icon: FilePen, color: C.red, group: 'edit', input: 'none' },

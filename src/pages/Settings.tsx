@@ -1,3 +1,4 @@
+import { FeedbackButton } from '../components/Feedback';
 import { useEffect, useState } from 'react';
 import { Sun, Moon, Monitor, Lock, Fingerprint, PenLine, HardDrive, Download, Upload, Smartphone, Info, KeyRound, ScanLine, Share, PlusSquare, MoreVertical } from 'lucide-react';
 import { useApp, toast, requireUnlock, withBusy, errMsg, confirmDialog } from '../lib/store';
@@ -36,7 +37,10 @@ export default function Settings() {
 
   return (
     <div className="mx-auto max-w-3xl px-4 pt-3 pb-10">
-      <h1 className="safe-top py-3 text-2xl font-black">Ajustes</h1>
+      <div className="safe-top flex items-center justify-between py-3">
+        <h1 className="text-2xl font-black">Ajustes</h1>
+        <FeedbackButton />
+      </div>
 
       <Section icon={<Sun className="size-5" />} title="Apariencia">
         <Field label="Tema">
@@ -70,7 +74,12 @@ export default function Settings() {
         <Field label="Calidad de los escaneos">
           <Segmented value={prefs.quality} onChange={(v) => setPrefs({ quality: v })} options={[{ value: 'high', label: 'Alta' }, { value: 'medium', label: 'Media' }, { value: 'low', label: 'Liviana' }]} />
         </Field>
-        <Toggle checked={prefs.ocrOnSave} onChange={(v) => setPrefs({ ocrOnSave: v })} label="Hacer buscables los PDF escaneados (OCR)" />
+        <Toggle
+          checked={prefs.ocrOnSave}
+          onChange={(v) => setPrefs({ ocrOnSave: v })}
+          label="Texto seleccionable en los PDF escaneados (OCR)"
+          hint="Lee el texto de cada página al guardar, para poder buscar, seleccionar y copiar en el PDF. Guardar tarda unos segundos más por página."
+        />
         <Field label="Idioma del texto (OCR)">
           <select className={inputCls} value={prefs.ocrLang} onChange={(e) => setPrefs({ ocrLang: e.target.value })}>
             {OCR_LANGS.map((l) => (
