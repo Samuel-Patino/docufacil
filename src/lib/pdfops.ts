@@ -3,10 +3,11 @@ import {
   PDFDocument, PDFPage, PDFName, PDFRawStream, PDFDict, PDFRef, PDFArray, PDFNumber, PDFHexString,
   StandardFonts, rgb, degrees, BlendMode, LineCapStyle, decodePDFRawStream,
   pushGraphicsState, popGraphicsState, beginText, endText, setFontAndSize, setTextRenderingMode,
-  TextRenderingMode, setCharacterSqueeze, setTextMatrix, showText, type PDFFont,
+  TextRenderingMode, setCharacterSqueeze, setTextMatrix, showText, concatTransformationMatrix, type PDFFont,
 } from '@cantoo/pdf-lib';
 import type { OcrResult } from './ocr';
 import { canvasToBlob } from './util';
+import { embedPick, type StdFamily } from './fonts';
 
 export class PdfPasswordError extends Error {
   constructor(incorrect = false) {
@@ -526,20 +527,17 @@ export async function fillForm(bytes: Uint8Array, values: Record<string, FormVal
 
 export type Annot =
   | { id: string; page: number; type: 'ink'; pts: { x: number; y: number }[]; color: string; width: number; opacity: number }
-  | { id: string; page: number; type: 'highlight' | 'whiteout' | 'rect'; x: number; y: number; w: number; h: number; color: string; width?: number }
+  | { id: string; page: number; type: 'highlight' | 'whiteout' | 'rect'; x: number; y: number; w: number; h: number; color: string; width?: number; cover?: boolean }
   | { id: string; page: number; type: 'line' | 'arrow'; x1: number; y1: number; x2: number; y2: number; color: string; width: number }
-  | { id: string; page: number; type: 'text'; x: number; y: number; w: number; text: string; size: number; color: string; bold?: boolean; serif?: boolean }
+  | { id: string; page: number; type: 'text'; x: number; y: number; w: number; text: string; size: number; color: string; bold?: boolean; serif?: boolean; font?: string; fallback?: StdFamily; weight?: number; italic?: boolean; sx?: number; fontLabel?: string }
   | { id: string; page: number; type: 'note'; x: number; y: number; text: string; color: string }
-  | { id: string; page: number; type: 'image'; x: number; y: number; w: number; h: number; src: string; signature?: boolean };
+  | { id: string; page: number; type: 'image'; x: number; y: number; w: number; h: number; src: string; signature?: boolean; cover?: boolean };
 
 /** Escribe las anotaciones dentro del PDF (coordenadas de pantalla a escala 1). */
 export async function applyAnnotations(bytes: Uint8Array, annots: Annot[], password?: string) {
   const d = await loadPdf(bytes, password);
-  const font = await d.embedFont(StandardFonts.Helvetica);
-  const bold = await d.embedFont(StandardFonts.HelveticaBold);
   const imgCache = new Map<string, any>();
-  const serifFonts: Record<string, any> = {};
-  const serifFont = async (b?: boolean) => (serifFonts[b ? 'b' : 'r'] ??= await d.embedFont(b ? StandardFonts.TimesRomanBold : StandardFonts.TimesRoman));
+  const fontCache = new Map<string, PDFFont>();
   for (const a of annots) {
     const p = d.getPage(a.page);
     const { rot } = pageBox(p);
@@ -591,11 +589,19 @@ export async function applyAnnotations(bytes: Uint8Array, annots: Annot[], passw
         break;
       }
       case 'text': {
-        const f = a.serif ? await serifFont(a.bold) : a.bold ? bold : font;
+        const { font: f, std } = await embedPick(d, a, a.text, fontCache);
+        const sx = a.sx && Math.abs(a.sx - 1) > 0.005 ? a.sx : 1;
         const lines = a.text.split('\n');
         lines.forEach((ln, i) => {
           const pt = U(a.x, a.y + a.size * (i * 1.25 + 0.92));
-          p.drawText(winAnsi(ln), { x: pt.x, y: pt.y, size: a.size, font: f, color: hexToRgb(a.color), rotate: degrees(rot) });
+          if (sx !== 1) {
+            // estira o encoge a lo ancho (en la dirección del texto) para igualar el ancho original
+            const t = (rot * Math.PI) / 180, c = Math.cos(t), s = Math.sin(t);
+            const ma = c * c * sx + s * s, mb = c * s * (sx - 1), md = s * s * sx + c * c;
+            p.pushOperators(pushGraphicsState(), concatTransformationMatrix(ma, mb, mb, md, pt.x - (ma * pt.x + mb * pt.y), pt.y - (mb * pt.x + md * pt.y)));
+          }
+          p.drawText(std ? winAnsi(ln) : ln, { x: pt.x, y: pt.y, size: a.size, font: f, color: hexToRgb(a.color), rotate: degrees(rot) });
+          if (sx !== 1) p.pushOperators(popGraphicsState());
         });
         break;
       }

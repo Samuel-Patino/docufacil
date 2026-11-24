@@ -19,6 +19,11 @@ registerRoute(
   ({ url }: any) => url.pathname.includes('/vendor/'),
   new CacheFirst({ cacheName: 'vendor', plugins: [new ExpirationPlugin({ maxEntries: 400 })] }),
 );
+// Letras para "Editar texto" (incluidas en la app o de Google Fonts)
+registerRoute(
+  ({ url }: any) => url.pathname.endsWith('.woff') || (url.hostname === 'cdn.jsdelivr.net' && url.pathname.startsWith('/fontsource/')),
+  new CacheFirst({ cacheName: 'fonts', plugins: [new ExpirationPlugin({ maxEntries: 120 })] }),
+);
 registerRoute(
   ({ url }: any) => url.hostname === 'cdn.jsdelivr.net' || url.hostname === 'tessdata.projectnaptha.com',
   new CacheFirst({ cacheName: 'ocr', plugins: [new ExpirationPlugin({ maxEntries: 60 })] }),

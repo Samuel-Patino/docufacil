@@ -13,7 +13,9 @@ import { getDoc, getDocBlob, updateDocBlob, addDoc } from '../lib/library';
 import type { DocMeta } from '../lib/db';
 import { openWithPassword } from '../lib/pdfAccess';
 import type { PDFDocumentProxy, PDFPageProxy } from '../lib/pdf';
-import { applyAnnotations, fillForm, protectPdf, type Annot, type FormValue } from '../lib/pdfops';
+import { applyAnnotations, fillForm, protectPdf, loadPdf, type Annot, type FormValue } from '../lib/pdfops';
+import { pickFont, pageFonts, predictWidth, ensureCssFont, measurePick, fontCss, type FontPick, type PdfFontInfo } from '../lib/fonts';
+import { makeCover } from '../lib/textcover';
 import { Button, IconButton, Modal, ColorDots, Spinner, Slider } from '../components/ui';
 import { SignaturePicker } from '../components/Signature';
 import { useApp, toast, promptDialog, confirmDialog, withBusy, errMsg } from '../lib/store';
@@ -83,7 +85,7 @@ export default function PdfEditor() {
   const visiblePage = useRef(0);
   const [curPage, setCurPage] = useState(0);
   const [twoUp, setTwoUp] = useState(false);
-  const [pagesOpen, setPagesOpen] = useState(false);
+  const [pagesOpen, setPagesOpen] = useState(true); // vista de páginas abierta por defecto
   const [menuOpen, setMenuOpen] = useState(false);
   const [fitOpen, setFitOpen] = useState(false);
   const [presenting, setPresenting] = useState(false);
@@ -183,6 +185,15 @@ export default function PdfEditor() {
     const next = annots.map((a) => (a.id === idv ? ({ ...a, ...patch } as Annot) : a));
     if (record) commit(next);
     else setAnnots(next);
+  };
+  const patch = (idv: string, ch: Partial<Annot>) => setAnnots((cur) => cur.map((a) => (a.id === idv ? ({ ...a, ...ch } as Annot) : a)));
+  // letras del PDF (se leen con pdf-lib una sola vez, sólo si se usa "Editar texto")
+  const libDoc = useRef<Promise<any> | null>(null);
+  const getFonts = async (i: number) => {
+    if (!bytes) return [];
+    libDoc.current ??= loadPdf(bytes, password).catch(() => null);
+    const d = await libDoc.current;
+    return d ? pageFonts(d, i) : [];
   };
   const remove = (idv: string) => {
     commit(annots.filter((a) => a.id !== idv));
@@ -400,6 +411,8 @@ export default function PdfEditor() {
                 add={add}
                 addMany={(xs) => commit([...annots, ...xs])}
                 update={update}
+                patch={patch}
+                getFonts={getFonts}
                 remove={remove}
                 commitMove={(prev) => {
                   setUndo((u) => [...u.slice(-50), prev]);
@@ -433,6 +446,11 @@ export default function PdfEditor() {
                 <span className="shrink-0 text-sm font-bold text-soft">Seleccionado</span>
                 {sel.type === 'text' && (
                   <>
+                    {sel.fontLabel && (
+                      <span className="rounded-full bg-surface-2 px-3 py-1 text-sm font-semibold text-soft" title="Letra detectada en el PDF">
+                        Letra: {sel.fontLabel}
+                      </span>
+                    )}
                     <IconButton label="Letra más pequeña" onClick={() => update(sel.id, { size: Math.max(6, (sel as any).size - 2) } as any)}>
                       <Minus className="size-5" />
                     </IconButton>
@@ -590,6 +608,9 @@ interface PageProps {
   style: { color: string; hl: string; width: number; fontSize: number };
   add: (a: Annot) => void;
   update: (id: string, patch: Partial<Annot>, record?: boolean) => void;
+  /** cambia una anotación sin crear un paso de deshacer (seguro para tareas en segundo plano) */
+  patch: (id: string, patch: Partial<Annot>) => void;
+  getFonts: (page: number) => Promise<PdfFontInfo[]>;
   remove: (id: string) => void;
   commitMove: (prev: Annot[]) => void;
   fields: FormField[];
@@ -692,8 +713,9 @@ function EditablePage(p: PageProps) {
   const drawing = !!p.tool && ['pen', 'marker', 'highlight', 'rect', 'arrow', 'whiteout'].includes(p.tool);
 
   // Texto original del PDF (para "Editar texto"): se carga apenas se elige la herramienta
-  type PdfLine = { str: string; x: number; base: number; w: number; size: number; serif: boolean; bold: boolean };
+  type PdfLine = { str: string; x: number; base: number; w: number; size: number; font: string; chars: Record<string, number>; pick?: FontPick };
   const pdfLines = useRef<PdfLine[] | null>(null);
+  const [, bump] = useState(0);
   useEffect(() => {
     if (p.tool !== 'edittext' || !page || pdfLines.current) return;
     (async () => {
@@ -705,16 +727,39 @@ function EditablePage(p: PageProps) {
         const t = pdfjs.Util.transform(vp.transform, it.transform);
         const size = Math.hypot(t[2], t[3]);
         if (size < 2) continue;
-        const fam = String(tc.styles?.[it.fontName]?.fontFamily || '') + ' ' + String(it.fontName || '');
-        items.push({
-          str: it.str,
-          x: t[4],
-          base: t[5],
-          w: it.width * (vp.scale || 1),
-          size,
-          serif: /serif|times|georgia|garamond|roman|cambria|book/i.test(fam) && !/sans/i.test(fam),
-          bold: /bold|black|heavy|semibold/i.test(fam),
-        });
+        items.push({ str: it.str, x: t[4], base: t[5], w: it.width * (vp.scale || 1), size, font: it.fontName, chars: { [it.fontName]: it.str.length } });
+      }
+      // Qué letra del PDF es cada una: se compara negrita/cursiva/tipo y el ancho real del texto
+      const infos = await p.getFonts(p.index).catch(() => [] as PdfFontInfo[]);
+      const picks: Record<string, FontPick> = {};
+      for (const name of new Set(items.map((i) => i.font))) {
+        let fo: any = null;
+        try {
+          if (page.commonObjs.has(name)) fo = page.commonObjs.get(name);
+        } catch {}
+        const generic = String(tc.styles?.[name]?.fontFamily || '');
+        // pdf.js sólo sabe si es negrita/cursiva en algunas letras
+        const known = fo && (fo.bold !== undefined || fo.italic !== undefined);
+        const bold = !!(fo?.bold || fo?.black);
+        const italic = !!fo?.italic;
+        const serif = generic === 'serif';
+        const mono = generic === 'monospace';
+        const mine = items.filter((i) => i.font === name);
+        const sample = mine.sort((a, b) => b.str.length - a.str.length)[0];
+        const used = [...new Set([...mine.map((i) => i.str).join('')])].filter((ch) => ch.trim());
+        let best: PdfFontInfo | null = null;
+        let bestScore = Infinity;
+        for (const c of infos) {
+          let sc = (known && c.bold !== bold ? 2 : 0) + (known && c.italic !== italic ? 2 : 0) + (c.mono !== mono ? 1 : 0);
+          // las letras recortadas sólo contienen los caracteres que usa el documento
+          if (c.charset && used.length) sc += (used.filter((ch) => !c.charset!.has(ch)).length / used.length) * 6;
+          const pred = predictWidth(c, sample.str, sample.size);
+          if (pred !== undefined && sample.w > 0) sc += Math.min(4, (Math.abs(pred - sample.w) / sample.w) * 12);
+          // sin datos para comprobarla: sólo gana si ninguna otra coincide
+          else if (!c.charset) sc += 1.5;
+          if (sc < bestScore) [best, bestScore] = [c, sc];
+        }
+        picks[name] = best ? pickFont({ ...best, bold: known ? bold || best.bold : best.bold, italic: known ? italic || best.italic : best.italic }) : pickFont({ base: '', bold, italic, serif, mono });
       }
       // Une los pedazos de una misma línea (el PDF suele cortar las líneas en varias partes)
       items.sort((a, b) => a.base - b.base || a.x - b.x);
@@ -725,9 +770,18 @@ function EditablePage(p: PageProps) {
           const gap = it.x - (l.x + l.w);
           l.str += (gap > l.size * 0.15 && !/\s$/.test(l.str) && !/^\s/.test(it.str) ? ' ' : '') + it.str;
           l.w = Math.max(l.w, it.x + it.w - l.x);
-        } else lines.push({ ...it });
+          l.chars[it.font] = (l.chars[it.font] || 0) + it.str.length;
+        } else lines.push({ ...it, chars: { ...it.chars } });
+      }
+      // letra de cada línea = la que más caracteres tiene
+      for (const l of lines) {
+        l.font = Object.entries(l.chars).sort((a, b) => b[1] - a[1])[0][0];
+        l.pick = picks[l.font];
       }
       pdfLines.current = lines;
+      // deja lista la letra para la vista previa
+      for (const pk of new Set(Object.values(picks).map((k) => JSON.stringify({ font: k.font, weight: k.weight, italic: k.italic }))))
+        ensureCssFont(JSON.parse(pk)).then((changed) => changed && bump((n) => n + 1));
     })();
   }, [p.tool, page]);
 
@@ -782,9 +836,15 @@ function EditablePage(p: PageProps) {
       if (!hit) return toast('Aquí no hay texto que se pueda cambiar. Si es una foto o un escaneo, usa “Corrector” y “Texto”.', 'info', 4500);
       const top = hit.base - hit.size * 0.92;
       const colors = sampleColors(hit.x, hit.base - hit.size * 0.8, hit.w, hit.size);
-      const cover: Annot = { id: uid(), page: p.index, type: 'whiteout', x: hit.x - 1, y: hit.base - hit.size * 0.95, w: hit.w + 2, h: hit.size * 1.25, color: colors.bg };
+      const pick: FontPick = hit.pick || pickFont({ base: '', bold: false, italic: false, serif: false, mono: false });
+      // tapa provisional (al instante); enseguida se cambia por el fondo reconstruido
+      const coverId = uid();
+      const cover: Annot = { id: coverId, page: p.index, type: 'whiteout', x: hit.x - 1, y: hit.base - hit.size * 0.95, w: hit.w + 2, h: hit.size * 1.25, color: colors.bg, cover: true };
       const nid = uid();
-      const txt: Annot = { id: nid, page: p.index, type: 'text', x: hit.x, y: top, w: 0, text: hit.str, size: hit.size, color: colors.ink, bold: hit.bold, serif: hit.serif };
+      const txt: Annot = {
+        id: nid, page: p.index, type: 'text', x: hit.x, y: top, w: 0, text: hit.str, size: hit.size, color: colors.ink,
+        font: pick.font, fallback: pick.fallback, weight: pick.weight, bold: pick.weight >= 600, italic: pick.italic, serif: pick.fallback === 'times', fontLabel: pick.label,
+      };
       // la línea ya no se puede volver a tomar (ahora es una anotación)
       pdfLines.current = lines.filter((l) => l !== hit);
       flushSync(() => {
@@ -792,6 +852,14 @@ function EditablePage(p: PageProps) {
         p.onPlaced(nid);
       });
       focusEditor(nid);
+      // Fondo exacto detrás de las letras + ancho igual al original
+      (async () => {
+        const [cov, width] = await Promise.all([makeCover(page!, hit).catch(() => null), measurePick(pick, hit.str, hit.size).catch(() => 0)]);
+        if (cov) p.patch(coverId, cov.src ? ({ type: 'image', src: cov.src, x: cov.x, y: cov.y, w: cov.w, h: cov.h, cover: true } as any) : ({ x: cov.x, y: cov.y, w: cov.w, h: cov.h, color: cov.color } as any));
+        let sx = width > 0 ? hit.w / width : 1;
+        sx = Math.abs(sx - 1) < 0.03 ? 1 : Math.max(0.75, Math.min(1.3, sx));
+        p.patch(nid, { sx, ...(cov ? { color: cov.ink } : {}) } as any);
+      })();
       return;
     }
     if (p.tool === 'note') {
@@ -1067,8 +1135,6 @@ function EditablePage(p: PageProps) {
   );
 }
 
-const SANS = 'Helvetica, Arial, sans-serif';
-const SERIF = '"Times New Roman", Times, serif';
 
 function AnnotShape({ a, marker, hidden }: { a: Annot; marker: string; hidden?: boolean }) {
   switch (a.type) {
@@ -1084,7 +1150,11 @@ function AnnotShape({ a, marker, hidden }: { a: Annot; marker: string; hidden?: 
     case 'highlight':
       return <rect data-id={a.id} x={a.x} y={a.y} width={a.w} height={a.h} fill={a.color} fillOpacity={0.4} style={{ mixBlendMode: 'multiply' }} />;
     case 'whiteout':
-      return <rect data-id={a.id} x={a.x} y={a.y} width={a.w} height={a.h} fill={a.color || '#fff'} stroke="#cbd5e1" strokeWidth={0.5} strokeDasharray="2 2" />;
+      return a.cover ? (
+        <rect data-id={a.id} x={a.x} y={a.y} width={a.w} height={a.h} fill={a.color || '#fff'} />
+      ) : (
+        <rect data-id={a.id} x={a.x} y={a.y} width={a.w} height={a.h} fill={a.color || '#fff'} stroke="#cbd5e1" strokeWidth={0.5} strokeDasharray="2 2" />
+      );
     case 'rect':
       return <rect data-id={a.id} x={a.x} y={a.y} width={a.w} height={a.h} fill="transparent" stroke={a.color} strokeWidth={a.width || 2} />;
     case 'line':
@@ -1097,7 +1167,19 @@ function AnnotShape({ a, marker, hidden }: { a: Annot; marker: string; hidden?: 
       );
     case 'text':
       return (
-        <text data-id={a.id} x={a.x} y={a.y} fill={a.color} fontSize={a.size} fontFamily={a.serif ? SERIF : SANS} fontWeight={a.bold ? 700 : 400} style={{ userSelect: 'none' }} opacity={hidden ? 0 : 1}>
+        <text
+          data-id={a.id}
+          x={a.x}
+          y={a.y}
+          fill={a.color}
+          fontSize={a.size}
+          fontFamily={fontCss(a)}
+          fontWeight={a.weight ?? (a.bold ? 700 : 400)}
+          fontStyle={a.italic ? 'italic' : undefined}
+          transform={a.sx && a.sx !== 1 ? `translate(${a.x} 0) scale(${a.sx} 1) translate(${-a.x} 0)` : undefined}
+          style={{ userSelect: 'none' }}
+          opacity={hidden ? 0 : 1}
+        >
           {a.text.split('\n').map((l, i) => (
             <tspan key={i} x={a.x} dy={i === 0 ? a.size * 0.92 : a.size * 1.25}>
               {l || ' '}
@@ -1311,7 +1393,8 @@ function DocProps({ open, onClose, pdf, doc, size }: { open: boolean; onClose: (
 function LiveText({ a, scale, onChange, onDone }: { a: Annot & { type: 'text' }; scale: number; onChange: (t: string) => void; onDone: (t: string) => void }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const [val, setVal] = useState(a.text);
-  const font = `${a.bold ? 700 : 400} ${a.size * scale}px ${a.serif ? SERIF : SANS}`;
+  const font = `${a.italic ? 'italic ' : ''}${a.weight ?? (a.bold ? 700 : 400)} ${a.size * scale}px ${fontCss(a)}`;
+  const sx = a.sx && a.sx !== 1 ? a.sx : 1;
   // ancho según el texto escrito (se mide con la misma letra)
   const measure = (t: string) => {
     const c = (LiveText as any)._c || ((LiveText as any)._c = document.createElement('canvas').getContext('2d'));
@@ -1352,6 +1435,8 @@ function LiveText({ a, scale, onChange, onDone }: { a: Annot & { type: 'text' };
         height: h,
         font,
         lineHeight: 1.25,
+        transform: sx !== 1 ? `scaleX(${sx})` : undefined,
+        transformOrigin: 'left top',
         color: a.color,
         border: 'none',
       }}
