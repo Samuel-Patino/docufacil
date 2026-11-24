@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, BookOpen, MoreVertical, ZoomIn, ZoomOut, PenLine, Pencil, Wrench, Share2, ChevronUp, ChevronDown, X, ScanText, Loader2, StickyNote, Files } from 'lucide-react';
+import { Search, BookOpen, MoreVertical, ZoomIn, ZoomOut, PenLine, Pencil, Wrench, Share2, ChevronUp, ChevronDown, X, ScanText, Loader2, StickyNote, Files, Menu } from 'lucide-react';
+import { PagesPanel } from './PagesPanel';
 import { pdfjs, renderPage, pageLines, linesToParagraphs, type PDFDocumentProxy, type PDFPageProxy, type Para } from '../lib/pdf';
 import type { DocMeta } from '../lib/db';
 import { TopBar, IconButton, Button, inputCls, Segmented, Spinner, BarButton } from './ui';
@@ -22,6 +23,7 @@ export function PdfViewer({ doc, pdf }: { doc: DocMeta; pdf: PDFDocumentProxy })
   const [hits, setHits] = useState<number[]>([]);
   const [hitIdx, setHitIdx] = useState(0);
   const [current, setCurrent] = useState(1);
+  const [pagesOpen, setPagesOpen] = useState(true); // vista de páginas abierta por defecto
   const scroller = useRef<HTMLDivElement>(null);
   const texts = useRef<Map<number, string>>(new Map());
 
@@ -86,6 +88,11 @@ export function PdfViewer({ doc, pdf }: { doc: DocMeta; pdf: PDFDocumentProxy })
         back
         right={
           <>
+            {mode === 'pages' && (
+              <IconButton label="Ver todas las páginas" active={pagesOpen} onClick={() => setPagesOpen((v) => !v)}>
+                <Menu className="size-6" />
+              </IconButton>
+            )}
             <IconButton label="Buscar texto" active={searchOpen} onClick={() => setSearchOpen((v) => !v)}>
               <Search className="size-6" />
             </IconButton>
@@ -120,12 +127,25 @@ export function PdfViewer({ doc, pdf }: { doc: DocMeta; pdf: PDFDocumentProxy })
       {mode === 'read' ? (
         <ReadingView pdf={pdf} />
       ) : (
-        <div ref={scroller} className="min-h-0 flex-1 overflow-auto overscroll-contain bg-surface-3/60 px-3 py-4">
+        <div className="relative flex min-h-0 flex-1">
+        {pagesOpen && (
+          <PagesPanel
+            pdf={pdf}
+            current={current - 1}
+            onPick={(i) => {
+              document.getElementById(`pg-${i + 1}`)?.scrollIntoView({ block: 'start' });
+              if (window.innerWidth < 768) setPagesOpen(false);
+            }}
+            onClose={() => setPagesOpen(false)}
+          />
+        )}
+        <div ref={scroller} className="min-h-0 min-w-0 flex-1 overflow-auto overscroll-contain bg-surface-3/60 px-3 py-4">
           <div className="mx-auto flex flex-col items-center gap-4" style={{ width: pageW }}>
             {Array.from({ length: pdf.numPages }, (_, i) => (
               <PageView key={i} pdf={pdf} n={i + 1} width={pageW} query={searchOpen ? query : ''} onVisible={setCurrent} />
             ))}
           </div>
+        </div>
         </div>
       )}
 

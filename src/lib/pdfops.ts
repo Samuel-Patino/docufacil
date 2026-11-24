@@ -529,7 +529,7 @@ export type Annot =
   | { id: string; page: number; type: 'ink'; pts: { x: number; y: number }[]; color: string; width: number; opacity: number }
   | { id: string; page: number; type: 'highlight' | 'whiteout' | 'rect'; x: number; y: number; w: number; h: number; color: string; width?: number; cover?: boolean }
   | { id: string; page: number; type: 'line' | 'arrow'; x1: number; y1: number; x2: number; y2: number; color: string; width: number }
-  | { id: string; page: number; type: 'text'; x: number; y: number; w: number; text: string; size: number; color: string; bold?: boolean; serif?: boolean; font?: string; fallback?: StdFamily; weight?: number; italic?: boolean; sx?: number; fontLabel?: string }
+  | { id: string; page: number; type: 'text'; x: number; y: number; w: number; text: string; size: number; color: string; bold?: boolean; serif?: boolean; font?: string; fallback?: StdFamily; weight?: number; italic?: boolean; sx?: number; fontLabel?: string; underline?: boolean }
   | { id: string; page: number; type: 'note'; x: number; y: number; text: string; color: string }
   | { id: string; page: number; type: 'image'; x: number; y: number; w: number; h: number; src: string; signature?: boolean; cover?: boolean };
 
@@ -600,8 +600,15 @@ export async function applyAnnotations(bytes: Uint8Array, annots: Annot[], passw
             const ma = c * c * sx + s * s, mb = c * s * (sx - 1), md = s * s * sx + c * c;
             p.pushOperators(pushGraphicsState(), concatTransformationMatrix(ma, mb, mb, md, pt.x - (ma * pt.x + mb * pt.y), pt.y - (mb * pt.x + md * pt.y)));
           }
-          p.drawText(std ? winAnsi(ln) : ln, { x: pt.x, y: pt.y, size: a.size, font: f, color: hexToRgb(a.color), rotate: degrees(rot) });
+          const shown = std ? winAnsi(ln) : ln;
+          p.drawText(shown, { x: pt.x, y: pt.y, size: a.size, font: f, color: hexToRgb(a.color), rotate: degrees(rot) });
           if (sx !== 1) p.pushOperators(popGraphicsState());
+          if (a.underline && shown.trim()) {
+            // subrayado: una línea bajo la línea base, del ancho del texto
+            const lw = f.widthOfTextAtSize(shown, a.size) * sx;
+            const by = a.y + a.size * (i * 1.25 + 0.92) + a.size * 0.12;
+            p.drawLine({ start: U(a.x, by), end: U(a.x + lw, by), thickness: Math.max(0.5, a.size * 0.06), color: hexToRgb(a.color) });
+          }
         });
         break;
       }

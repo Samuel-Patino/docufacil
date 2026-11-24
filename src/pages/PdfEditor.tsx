@@ -6,7 +6,7 @@ import {
   MoveHorizontal, TextCursorInput, Trash, ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import { flushSync } from 'react-dom';
-import { PageThumb } from '../components/PageGrid';
+import { PagesPanel } from '../components/PagesPanel';
 import { pdfjs, renderPage } from '../lib/pdf';
 import { formatBytes } from '../lib/util';
 import { getDoc, getDocBlob, updateDocBlob, addDoc } from '../lib/library';
@@ -14,8 +14,9 @@ import type { DocMeta } from '../lib/db';
 import { openWithPassword } from '../lib/pdfAccess';
 import type { PDFDocumentProxy, PDFPageProxy } from '../lib/pdf';
 import { applyAnnotations, fillForm, protectPdf, loadPdf, type Annot, type FormValue } from '../lib/pdfops';
-import { pickFont, pageFonts, predictWidth, ensureCssFont, measurePick, fontCss, type FontPick, type PdfFontInfo } from '../lib/fonts';
+import { pickFont, fontNamesFromData, infoFromNames, pageFonts, predictWidth, ensureCssFont, measurePick, fontCss, type FontPick, type PdfFontInfo } from '../lib/fonts';
 import { makeCover } from '../lib/textcover';
+import { TextFormat, type FmtPatch } from '../components/TextFormat';
 import { Button, IconButton, Modal, ColorDots, Spinner, Slider } from '../components/ui';
 import { SignaturePicker } from '../components/Signature';
 import { useApp, toast, promptDialog, confirmDialog, withBusy, errMsg } from '../lib/store';
@@ -69,6 +70,7 @@ export default function PdfEditor() {
   const [hl, setHl] = useState(HL[0]);
   const [width, setWidth] = useState(2.5);
   const [fontSize, setFontSize] = useState(14);
+  const [textFmt, setTextFmt] = useState<FmtPatch>({ font: 'helvetica', fallback: 'helvetica', fontLabel: 'Arial / Helvetica' });
   const [selected, setSelected] = useState<string | null>(null);
   const [sigOpen, setSigOpen] = useState(params.get('tool') === 'sign');
   const [formMode, setFormMode] = useState(params.get('tool') === 'form');
@@ -407,7 +409,7 @@ export default function PdfEditor() {
                 setSelected={setSelected}
                 editingId={editingId}
                 setEditingId={setEditingId}
-                style={{ color, hl, width, fontSize }}
+                style={{ color, hl, width, fontSize, fmt: textFmt }}
                 add={add}
                 addMany={(xs) => commit([...annots, ...xs])}
                 update={update}
@@ -446,20 +448,12 @@ export default function PdfEditor() {
                 <span className="shrink-0 text-sm font-bold text-soft">Seleccionado</span>
                 {sel.type === 'text' && (
                   <>
-                    {sel.fontLabel && (
-                      <span className="rounded-full bg-surface-2 px-3 py-1 text-sm font-semibold text-soft" title="Letra detectada en el PDF">
-                        Letra: {sel.fontLabel}
-                      </span>
+                    <TextFormat value={sel} onChange={(pt) => update(sel.id, pt as any)} />
+                    {editingId !== sel.id && (
+                      <Button variant="secondary" size="sm" onClick={() => startEditText(sel.id)}>
+                        Editar texto
+                      </Button>
                     )}
-                    <IconButton label="Letra más pequeña" onClick={() => update(sel.id, { size: Math.max(6, (sel as any).size - 2) } as any)}>
-                      <Minus className="size-5" />
-                    </IconButton>
-                    <IconButton label="Letra más grande" onClick={() => update(sel.id, { size: Math.min(96, (sel as any).size + 2) } as any)}>
-                      <Plus className="size-5" />
-                    </IconButton>
-                    <Button variant="secondary" size="sm" onClick={() => startEditText(sel.id)}>
-                      Editar texto
-                    </Button>
                   </>
                 )}
                 {sel.type === 'note' && (
@@ -485,9 +479,13 @@ export default function PdfEditor() {
               <>
                 <ColorDots nowrap small custom value={color} colors={COLORS.slice(0, 6)} onChange={setColor} />
                 {tool === 'text' ? (
-                  <div className="w-40 shrink-0">
-                    <Slider label="Tamaño" value={fontSize} min={8} max={48} onChange={setFontSize} />
-                  </div>
+                  <TextFormat
+                    value={{ ...textFmt, size: fontSize }}
+                    onChange={({ size, ...rest }) => {
+                      if (size) setFontSize(size);
+                      setTextFmt((f) => ({ ...f, ...rest }));
+                    }}
+                  />
                 ) : tool !== 'note' ? (
                   <div className="w-40 shrink-0">
                     <Slider label="Grosor" value={width} min={1} max={10} step={0.5} onChange={setWidth} />
@@ -605,7 +603,7 @@ interface PageProps {
   editingId: string | null;
   setEditingId: (id: string | null) => void;
   addMany: (a: Annot[]) => void;
-  style: { color: string; hl: string; width: number; fontSize: number };
+  style: { color: string; hl: string; width: number; fontSize: number; fmt: FmtPatch };
   add: (a: Annot) => void;
   update: (id: string, patch: Partial<Annot>, record?: boolean) => void;
   /** cambia una anotación sin crear un paso de deshacer (seguro para tareas en segundo plano) */
@@ -717,6 +715,9 @@ function EditablePage(p: PageProps) {
   const pdfLines = useRef<PdfLine[] | null>(null);
   const [, bump] = useState(0);
   useEffect(() => {
+    for (const a of p.annots) if (a.type === 'text' && a.font) ensureCssFont(a).then((c) => c && bump((n) => n + 1));
+  }, [p.annots]);
+  useEffect(() => {
     if (p.tool !== 'edittext' || !page || pdfLines.current) return;
     (async () => {
       const vp = page.getViewport({ scale: 1 });
@@ -744,6 +745,13 @@ function EditablePage(p: PageProps) {
         const italic = !!fo?.italic;
         const serif = generic === 'serif';
         const mono = generic === 'monospace';
+        // 1) nombre real guardado dentro del archivo de la letra (lo más fiable)
+        const nm = fontNamesFromData(fo?.data);
+        if (nm) {
+          picks[name] = pickFont(infoFromNames(nm, { bold: known ? bold : undefined, italic: known ? italic : undefined, serif, mono }));
+          continue;
+        }
+        // 2) si no, se compara con las letras del PDF (caracteres y anchos)
         const mine = items.filter((i) => i.font === name);
         const sample = mine.sort((a, b) => b.str.length - a.str.length)[0];
         const used = [...new Set([...mine.map((i) => i.str).join('')])].filter((ch) => ch.trim());
@@ -823,7 +831,7 @@ function EditablePage(p: PageProps) {
       // Se escribe directamente sobre la página
       const nid = uid();
       flushSync(() => {
-        p.add({ id: nid, page: p.index, type: 'text', x: pt.x, y: pt.y - p.style.fontSize * 0.6, w: 0, text: '', size: p.style.fontSize, color: p.style.color });
+        p.add({ id: nid, page: p.index, type: 'text', x: pt.x, y: pt.y - p.style.fontSize * 0.6, w: 0, text: '', size: p.style.fontSize, color: p.style.color, ...(p.style.fmt as any), sx: 1 });
         p.onPlaced(nid);
       });
       focusEditor(nid);
@@ -1176,6 +1184,7 @@ function AnnotShape({ a, marker, hidden }: { a: Annot; marker: string; hidden?: 
           fontFamily={fontCss(a)}
           fontWeight={a.weight ?? (a.bold ? 700 : 400)}
           fontStyle={a.italic ? 'italic' : undefined}
+          textDecoration={a.underline ? 'underline' : undefined}
           transform={a.sx && a.sx !== 1 ? `translate(${a.x} 0) scale(${a.sx} 1) translate(${-a.x} 0)` : undefined}
           style={{ userSelect: 'none' }}
           opacity={hidden ? 0 : 1}
@@ -1207,31 +1216,6 @@ function MenuRow({ icon, label, onClick, checked }: { icon: React.ReactNode; lab
       <span className="flex-1">{label}</span>
       {checked && <Check className="size-5 text-primary" />}
     </button>
-  );
-}
-
-/** Vista general de las páginas (miniaturas) para saltar a cualquiera. */
-function PagesPanel({ pdf, current, onPick, onClose }: { pdf: PDFDocumentProxy; current: number; onPick: (i: number) => void; onClose: () => void }) {
-  const list = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    list.current?.querySelector(`[data-thumb="${current}"]`)?.scrollIntoView({ block: 'nearest' });
-  }, [current]);
-  return (
-    <>
-      <div className="absolute inset-0 z-20 bg-black/30 md:hidden" onClick={onClose} />
-      <aside className="absolute inset-y-0 left-0 z-30 flex w-40 flex-col border-r border-line bg-neutral-800 shadow-pop animate-fade md:relative md:z-0 md:shadow-none">
-        <div ref={list} className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4">
-          {Array.from({ length: pdf.numPages }, (_, i) => (
-            <button key={i} data-thumb={i} onClick={() => onPick(i)} className="mb-4 block w-full text-center">
-              <div className={`rounded-md p-1 transition ${i === current ? 'bg-primary/60' : 'hover:bg-white/10'}`}>
-                <PageThumb pdf={pdf} index={i} className="rounded-sm bg-white" />
-              </div>
-              <span className={`mt-1 block text-sm font-bold ${i === current ? 'text-white' : 'text-white/70'}`}>{i + 1}</span>
-            </button>
-          ))}
-        </div>
-      </aside>
-    </>
   );
 }
 
@@ -1436,6 +1420,7 @@ function LiveText({ a, scale, onChange, onDone }: { a: Annot & { type: 'text' };
         font,
         lineHeight: 1.25,
         transform: sx !== 1 ? `scaleX(${sx})` : undefined,
+        textDecoration: a.underline ? 'underline' : undefined,
         transformOrigin: 'left top',
         color: a.color,
         border: 'none',

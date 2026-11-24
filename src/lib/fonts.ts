@@ -53,9 +53,9 @@ const LOCAL: Record<string, Record<string, string>> = {
 
 // Equivalentes conocidos (misma forma y ancho de letra)
 const ALIASES: [RegExp, string][] = [
-  [/^(arial|helvetica|arimo|liberationsans|nimbussans|nimbussansl|swiss721|helveticaneue|arialunicode)$/, 'helvetica'],
-  [/^(times|timesnewroman|timesroman|tinos|liberationserif|nimbusroman|nimbusromno9l|timesten)$/, 'times'],
-  [/^(courier|couriernew|cousine|liberationmono|nimbusmono|nimbusmonops)$/, 'courier'],
+  [/^(arial|helvetica|arimo|liberationsans|nimbussans|nimbussansl|swiss721|helveticaneue|arialunicode|foxitsans|arialmt)$/, 'helvetica'],
+  [/^(times|timesnewroman|timesroman|tinos|liberationserif|nimbusroman|nimbusromno9l|timesten|foxitserif|timesnewromanps)$/, 'times'],
+  [/^(courier|couriernew|cousine|liberationmono|nimbusmono|nimbusmonops|foxitfixed|couriernewps)$/, 'courier'],
   [/^(calibri|carlito)$/, 'carlito'],
   [/^(cambria|caladea)$/, 'caladea'],
   [/^(segoeui|segoe)$/, 'open-sans'],
@@ -441,4 +441,63 @@ function toUnicode(stream: any): Map<string, number> | undefined {
       }
     }
   return map.size ? map : undefined;
+}
+
+/**
+ * Nombre real de una letra leyendo la tabla "name" del archivo de fuente que genera pdf.js
+ * (conserva el nombre original de la letra incrustada o el del PDF).
+ */
+export function fontNamesFromData(data?: Uint8Array | null): { family: string; style: string; ps: string } | null {
+  if (!data || data.length < 12) return null;
+  try {
+    const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    const n = dv.getUint16(4);
+    let off = -1;
+    for (let i = 0; i < n; i++) {
+      const r = 12 + i * 16;
+      const tag = String.fromCharCode(data[r], data[r + 1], data[r + 2], data[r + 3]);
+      if (tag === 'name') off = dv.getUint32(r + 8);
+    }
+    if (off < 0) return null;
+    const count = dv.getUint16(off + 2), strOff = off + dv.getUint16(off + 4);
+    const best: Record<number, { s: string; rank: number }> = {};
+    for (let k = 0; k < count; k++) {
+      const r = off + 6 + k * 12;
+      const plat = dv.getUint16(r), lang = dv.getUint16(r + 4), id = dv.getUint16(r + 6), len = dv.getUint16(r + 8), o = strOff + dv.getUint16(r + 10);
+      if (![1, 2, 4, 6, 16, 17].includes(id)) continue;
+      let s = '';
+      if (plat === 3 || plat === 0) for (let j = 0; j + 1 < len; j += 2) s += String.fromCharCode(dv.getUint16(o + j));
+      else for (let j = 0; j < len; j++) s += String.fromCharCode(data[o + j]);
+      s = s.replace(/\0/g, '').trim();
+      if (!s) continue;
+      const rank = plat === 3 && lang === 0x409 ? 3 : plat === 3 ? 2 : 1;
+      if (!best[id] || rank > best[id].rank) best[id] = { s, rank };
+    }
+    const g = (id: number) => best[id]?.s || '';
+    const family = g(16) || g(1);
+    const style = g(17) || g(2);
+    const ps = g(6);
+    if (!family && !ps) return null;
+    return { family, style, ps };
+  } catch {
+    return null;
+  }
+}
+
+/** Datos de la letra a partir de su nombre real (familia + estilo). */
+export function infoFromNames(nm: { family: string; style: string; ps: string }, flags: { bold?: boolean; italic?: boolean; serif?: boolean; mono?: boolean }) {
+  // familias limpias ("Times New Roman") se prefieren; si parece un nombre PostScript se usa tal cual
+  const clean = !!nm.family && !/^[A-Z]{6}\+/.test(nm.family) && !/^(Unknown|Original licence)$/i.test(nm.family) && (/\s/.test(nm.family) || !/-/.test(nm.family));
+  const fam = clean ? nm.family.replace(/\s+/g, '') : splitFontName(nm.ps || nm.family).fam;
+  const style = ((clean ? nm.style : splitFontName(nm.ps || nm.family).style) || '').replace(/^unknown$/i, '');
+  const st = style.toLowerCase();
+  const base = fam + (style && !/^regular|normal|roman|book$/i.test(style) ? '-' + style.replace(/\s+/g, '') : '');
+  return {
+    base,
+    bold: /bold|black|heavy|semibold|demi/.test(st) || !!flags.bold,
+    italic: /italic|oblique/.test(st) || !!flags.italic,
+    serif: !!flags.serif,
+    mono: !!flags.mono,
+    weight: parseWeight(st) === 400 && flags.bold ? 700 : parseWeight(st),
+  };
 }

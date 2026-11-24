@@ -39,6 +39,8 @@ export async function openPdf(data: Blob | ArrayBuffer | Uint8Array, password?: 
     wasmUrl: vendor + 'wasm/',
     iccUrl: vendor + 'iccs/',
     isEvalSupported: false,
+    // conserva el archivo de cada letra: "Editar texto" lee de ahí el nombre real de la fuente
+    fontExtraProperties: true,
   } as any);
   try {
     return await task.promise;
