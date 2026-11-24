@@ -86,13 +86,15 @@ export function PdfViewer({ doc, pdf }: { doc: DocMeta; pdf: PDFDocumentProxy })
         title={doc.name}
         sub={`${pdf.numPages} página(s)`}
         back
+        left={
+          mode === 'pages' && (
+            <IconButton label="Ver todas las páginas" active={pagesOpen} onClick={() => setPagesOpen((v) => !v)}>
+              <Menu className="size-6" />
+            </IconButton>
+          )
+        }
         right={
           <>
-            {mode === 'pages' && (
-              <IconButton label="Ver todas las páginas" active={pagesOpen} onClick={() => setPagesOpen((v) => !v)}>
-                <Menu className="size-6" />
-              </IconButton>
-            )}
             <IconButton label="Buscar texto" active={searchOpen} onClick={() => setSearchOpen((v) => !v)}>
               <Search className="size-6" />
             </IconButton>

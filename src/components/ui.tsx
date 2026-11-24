@@ -78,7 +78,7 @@ export function Card({ children, className = '', ...rest }: { children: ReactNod
   );
 }
 
-export function TopBar({ title, back, right, sub }: { title: ReactNode; back?: string | boolean; right?: ReactNode; sub?: ReactNode }) {
+export function TopBar({ title, back, right, sub, left }: { title: ReactNode; back?: string | boolean; right?: ReactNode; sub?: ReactNode; left?: ReactNode }) {
   const nav = useNavigate();
   return (
     <header className="safe-top sticky top-0 z-30 border-b border-line bg-surface/90 backdrop-blur">
@@ -88,6 +88,7 @@ export function TopBar({ title, back, right, sub }: { title: ReactNode; back?: s
             <ChevronLeft className="size-7" />
           </IconButton>
         )}
+        {left}
         <div className="min-w-0 flex-1 px-1">
           <h1 className="truncate text-lg font-extrabold leading-tight sm:text-xl">{title}</h1>
           {sub && <div className="truncate text-sm text-soft">{sub}</div>}
